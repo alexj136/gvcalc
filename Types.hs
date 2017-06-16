@@ -31,12 +31,12 @@ instance Free Type where
     free ty = case ty of
         TSession s            -> free s
         TUnit                 -> S.empty
-        TLinearPair t1 t2     -> S.union (free t1) (free t2)
-        TFunction t1 t2       -> S.union (free t1) (free t2)
-        TLinearFunction t1 t2 -> S.union (free t1) (free t2)
+        TLinearPair t1 t2     -> free t1 `S.union` free t2
+        TFunction t1 t2       -> free t1 `S.union` free t2
+        TLinearFunction t1 t2 -> free t1 `S.union` free t2
         TRequest s            -> free s
         TAccept s             -> free s
-        TAccessPoint s1 s2    -> S.union (free s1) (free s2)
+        TAccessPoint s1 s2    -> free s1 `S.union` free s2
 
 instance Free Session where
     free st = case st of
@@ -48,39 +48,37 @@ instance Free Session where
         SVar n      -> S.singleton n
         SRec n s    -> S.delete n (free s)
 
+α :: Alpha t => t -> t -> Bool
+α t t' = case alpha t t' of { Just _ -> True ; _ -> False }
+
 class Alpha t where
     alpha :: t -> t -> Maybe (M.Map Name Name)
 
 instance Alpha Type where
     alpha ty1 ty2 = case (ty1, ty2) of
-        (TSession s          , TSession s'         ) ->
-            alpha s s'
-        (TUnit               , TUnit               ) ->
-            Just M.empty
         (TLinearPair t t'    , TLinearPair u u'    ) ->
-            alphaAgree (alpha t u) (alpha t' u')
+            alpha t u `alphaAgree` alpha t' u'
         (TFunction t t'      , TFunction u u'      ) ->
-            alphaAgree (alpha t u) (alpha t' u')
+            alpha t u `alphaAgree` alpha t' u'
         (TLinearFunction t t', TLinearFunction u u') ->
-            alphaAgree (alpha t u) (alpha t' u')
-        (TRequest s          , TRequest s'         ) ->
-            alpha s s'
-        (TAccept s           , TAccept s'          ) ->
-            alpha s s'
-        (TAccessPoint s1 s1' , TAccessPoint s2 s2' ) ->
-            alphaAgree (alpha s1 s2) (alpha s1' s2')
-        (_                   , _                   ) ->
-            Nothing
+            alpha t u `alphaAgree` alpha t' u'
+        (TAccessPoint s s'   , TAccessPoint t t'   ) ->
+            alpha s t `alphaAgree` alpha s' t'
+        (TSession s          , TSession s'         ) -> alpha s s'
+        (TRequest s          , TRequest s'         ) -> alpha s s'
+        (TAccept s           , TAccept s'          ) -> alpha s s'
+        (TUnit               , TUnit               ) -> Just M.empty
+        (_                   , _                   ) -> Nothing
 
 instance Alpha Session where
     alpha st1 st2 = case (st1, st2) of
         (SEnd       , SEnd         ) -> Just M.empty
-        (SIn  t s   , SIn  t' s'   ) -> alphaAgree (alpha t t') (alpha s s')
-        (SOut t s   , SOut t' s'   ) -> alphaAgree (alpha t t') (alpha s s')
-        (SCase   t f, SCase   t' f') -> undefined
-        (SSelect t f, SSelect t' f') -> undefined
+        (SIn  t s   , SIn  t' s'   ) -> alpha t t' `alphaAgree` alpha s s'
+        (SOut t s   , SOut t' s'   ) -> alpha t t' `alphaAgree` alpha s s'
+        (SCase   t f, SCase   t' f') -> alpha t t' `alphaAgree` alpha f f'
+        (SSelect t f, SSelect t' f') -> alpha t t' `alphaAgree` alpha f f'
         (SVar n     , SVar n'      ) -> Just $ M.singleton n n'
-        (SRec n s   , SRec n' s'   ) -> undefined
+        (SRec n s   , SRec n' s'   ) -> alphaBindAgree (alpha s s') n n'
         (_          , _            ) -> Nothing
 
 alphaAgree :: Maybe (M.Map Name Name) -> Maybe (M.Map Name Name) ->
@@ -92,6 +90,14 @@ alphaAgree ma mb = do
         return $ a `M.union` b
     else
         Nothing
+
+alphaBindAgree :: Maybe (M.Map Name Name) -> Name -> Name ->
+    Maybe (M.Map Name Name)
+alphaBindAgree maybeA n m = do
+    a <- maybeA
+    if        n `notElem` (M.keys a) && m `notElem` (M.elems a) then maybeA
+    else if   M.lookup n a == Just m                            then maybeA
+    else Nothing
 
 class ContractiveWithIllegals t where
     cwi :: [Name] -> t -> Bool
@@ -143,7 +149,7 @@ class Subtype t where
 instance Subtype Type where
     (TSession s          ) <: (TSession s'         ) = s <: s'
     (TUnit               ) <: (TUnit               ) = True
-    (TLinearPair t t'    ) <: (TLinearPair u u'    ) = undefined
+--  (TLinearPair t t'    ) <: (TLinearPair u u'    ) = undefined
     (TFunction t t'      ) <: (TFunction u u'      ) = u <: t && t' <: u'
     (TLinearFunction t t') <: (TLinearFunction u u') = u <: t && t' <: u'
     (TRequest s          ) <: (TRequest s'         ) = undefined
