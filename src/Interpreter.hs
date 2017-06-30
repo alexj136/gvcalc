@@ -1,20 +1,10 @@
 module Interpreter where
 
-import qualified Data.Map as M
-import Control.Monad.State
-
+import Util
 import Syntax
 
-data Context
-    = Hole
-    | CtxExpApp Context Exp
-    | ValCtxApp Val Context
-    | CtxExpPair Context Exp
-    | ValCtxPair Val Context
-    | CtxLet Name Name Context Exp
-    | CtxSelect Bool Context
-    | CtxCase Context Exp Exp
-    deriving (Show, Eq, Ord)
+import qualified Data.Map as M
+import Control.Monad.State
 
 newtype BufContents
     = BufContents (Integer, [Either Val Label], Integer, [Either Val Label])
@@ -44,7 +34,7 @@ step (bufs, exp:exps) = case exp of
     App (App (Lit (Receive)) (Lit v)) (Lit (Chan c)) -> undefined
     Lit v              -> undefined
     App e1 e2          -> undefined
-    ExpPair e1 e2      -> undefined
-    ExpLet n1 n2 e1 e2 -> undefined
-    ExpSelect b e      -> undefined
-    ExpCase e t f      -> undefined
+    Pair e1 e2      -> undefined
+    Let n1 n2 e1 e2 -> undefined
+    Select b e      -> undefined
+    Case e t f      -> undefined

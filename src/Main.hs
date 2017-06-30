@@ -1,3 +1,5 @@
+import Lexer
+import Parser
 import Syntax
 import Types
 import Interpreter

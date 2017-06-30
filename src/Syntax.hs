@@ -1,13 +1,11 @@
 module Syntax where
 
+import Util 
+
 import qualified Data.Set as S
 import Control.Monad.State
 
-type Name = Integer
 type Label = String
-
-freshName :: Monad m => StateT Name m Name
-freshName = state $ \n -> (n, n + 1)
 
 data Val
     = Var Name
@@ -26,10 +24,10 @@ data Val
 data Exp
     = Lit Val
     | App Exp Exp
-    | ExpPair Exp Exp
-    | ExpLet Name Name Exp Exp
-    | ExpSelect Bool Exp
-    | ExpCase Exp Exp Exp
+    | Pair Exp Exp
+    | Let Name Name Exp Exp
+    | Select Bool Exp
+    | Case Exp Exp Exp
     deriving (Show, Eq, Ord)
 
 data Config
@@ -51,13 +49,13 @@ instance Free Val where
 
 instance Free Exp where
     free e = case e of
-        Lit v              -> free v
-        App e1 e2          -> free e1 `S.union` free e2
-        ExpPair e1 e2      -> free e1 `S.union` free e2
-        ExpLet n1 n2 e1 e2 ->
+        Lit v           -> free v
+        App e1 e2       -> free e1 `S.union` free e2
+        Pair e1 e2      -> free e1 `S.union` free e2
+        Let n1 n2 e1 e2 ->
             (S.delete n1 (S.delete n2 (free e1))) `S.union` free e2
-        ExpSelect _ e      -> free e
-        ExpCase e t f      -> free e `S.union` free t `S.union` free f
+        Select _ e      -> free e
+        Case e t f      -> free e `S.union` free t `S.union` free f
 
 class Subst t where
     (//) :: Val -> Name -> t -> State Name t
@@ -75,18 +73,18 @@ instance Subst Val where
 
 instance Subst Exp where
     (//) val name bodyExp = case bodyExp of
-        Lit v              -> liftM Lit ((val // name) v)
-        App e1 e2          ->
+        Lit v           -> liftM Lit ((val // name) v)
+        App e1 e2       ->
             liftM2 App ((val // name) e1) ((val // name) e2)
-        ExpPair e1 e2      ->
-            liftM2 ExpPair ((val // name) e1) ((val // name) e2)
-        ExpLet n1 n2 e1 e2 -> do
+        Pair e1 e2      ->
+            liftM2 Pair ((val // name) e1) ((val // name) e2)
+        Let n1 n2 e1 e2 -> do
             n1' <- if name == n1 then return name else freshName
             n2' <- if name == n2 then return name else freshName
             e1' <- (val // name) e1
             e2' <- (((Var n2') // n2) >=> ((Var n1') // n1)
                 >=> (val // name)) e2
-            return $ ExpLet n1' n2' e1' e2'
-        ExpSelect b e      -> liftM (ExpSelect b) ((val // name) e)
-        ExpCase e t f      ->
-            liftM3 ExpCase ((val // name) e) ((val // name) t) ((val // name) f)
+            return $ Let n1' n2' e1' e2'
+        Select b e      -> liftM (Select b) ((val // name) e)
+        Case e t f      ->
+            liftM3 Case ((val // name) e) ((val // name) t) ((val // name) f)

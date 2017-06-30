@@ -1,10 +1,11 @@
 module Types where
 
+import Util
+import Syntax
+
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Control.Monad.State
-
-import Syntax
 
 data Type
     = TSession Session
