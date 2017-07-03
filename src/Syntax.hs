@@ -58,7 +58,7 @@ instance Free Exp where
         Case e t f      -> free e `S.union` free t `S.union` free f
 
 class Subst t where
-    (//) :: Val -> Name -> t -> State Name t
+    (//) :: Val -> Name -> t -> GVCalc t
 
 instance Subst Val where
     (//) val name bodyVal = case bodyVal of

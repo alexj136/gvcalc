@@ -88,7 +88,7 @@ data TokenType
     | TK_EOF
     deriving (Show, Eq)
 
-scan :: String -> Result (M.Map String Name, Name, [Token])
+scan :: String -> Except String (M.Map String Name, Name, [Token])
 scan = (either throwError return) . lexer
 
 lexer :: String -> Either String (M.Map String Name, Name, [Token])

@@ -12,7 +12,7 @@ import Control.Monad (liftM, ap)
 import Control.Monad.Except (throwError)
 }
 
-%monad { Result }
+%monad { GVCalc }
 %name parseExps EXPS
 %name parseConfig CONFIG
 
@@ -69,13 +69,13 @@ CONFIG
     | { undefined }
 
 {
-parse :: [Token] -> Result Exp
+parse :: [Token] -> GVCalc Exp
 parse = (fmap many) . parseExps
 
-parseError :: [Token] -> Result a
+parseError :: [Token] -> GVCalc a
 parseError tokens = throwError $ case tokens of
     []                     -> "Reached end of file while parsing"
-    (Token (pos, tk):rest) -> "Parse error: " ++ showMPos pos
+    (Token (pos, tk):rest) -> "Parse error: " ++ show pos
 
 many :: [Exp] -> Exp
 many [ ] = error "many of []"
