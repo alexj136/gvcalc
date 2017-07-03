@@ -6,7 +6,8 @@ cabal-version:       >=1.10
 
 executable gvcalc
   main-is:             Main.hs
-  other-modules:       Syntax,
+  other-modules:       Util,
+                       Syntax,
                        Types,
                        Interpreter,
                        Lexer,

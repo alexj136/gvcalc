@@ -1,9 +1,10 @@
 {
-module Lexer (Token (..), TokenType (..), tkTy, scan) where
+module Lexer where--(Token (..), TokenType (..), tkTy, scan) where
 
 import Util
 
 import Control.Monad.Except
+import Control.Monad.State
 import qualified Data.Map as M
 }
 
@@ -88,20 +89,38 @@ data TokenType
     | TK_EOF
     deriving (Show, Eq)
 
-scan :: String -> Except String (M.Map String Name, Name, [Token])
-scan = (either throwError return) . lexer
+scan :: String -> GVCalc [Token]
+scan s = do
+    (fn, nmap) <- get
+    (nmap', fn', tks) <- lift
+        $ either throwError return
+        $ lexer (AlexUserState (rev nmap) fn) s
+    put (fn', rev nmap')
+    return tks
 
-lexer :: String -> Either String (M.Map String Name, Name, [Token])
-lexer s = runAlex s loop where
+lexer :: AlexUserState -> String ->
+    Either String (M.Map String Name, Name, [Token])
+lexer ust s = runAlexWithInitUserState ust s loop where
     loop = do
-        tk <- alexMonadScan
-        if tkTy tk == TK_EOF then do
-            AlexUserState map nn <- getUserState
+        currentToken         <- alexMonadScan
+        AlexUserState map nn <- getUserState
+        if tkTy currentToken == TK_EOF then
             return (map, nn, [])
         else do
-            (map, nn, tks) <- loop
-            AlexUserState map nn <- getUserState
-            return (map, nn, (tk:tks))
+            (map, nn, tokens) <- loop
+            return (map, nn, (currentToken:tokens))
+
+runAlexWithInitUserState :: AlexUserState -> String -> Alex a -> Either String a
+runAlexWithInitUserState ust input (Alex f) =
+    case f (AlexState
+        { alex_pos   = alexStartPos
+        , alex_inp   = input
+        , alex_chr   = '\n'
+        , alex_bytes = []
+        , alex_ust   = ust
+        , alex_scd   = 0    }) of
+        Left  msg    -> Left msg
+        Right (_, a) -> Right a
 
 mkTK :: TokenType -> AlexInput -> Int -> Alex Token
 mkTK tk (AlexPn _ r c, _, _, _) l =

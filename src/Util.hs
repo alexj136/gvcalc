@@ -1,8 +1,17 @@
 module Util where
 
+import Data.List (nub)
 import qualified Data.Map as M
 import Control.Monad.State
 import Control.Monad.Except
+
+-- Flip a map
+rev :: Ord k => Ord v => M.Map k v -> M.Map v k
+rev m = let elems = M.elems m in
+    if length (nub elems) == length elems then
+        M.fromList $ map (\(k, v) -> (v, k)) $ M.toList m
+    else
+        error "rev: duplicate values"
 
 --------------------------------------------------------------------------------
 -- Names
@@ -33,6 +42,10 @@ and an Except String for error messages.
 -------------------------------------------------------------------------------}
 
 type GVCalc = StateT (Name, M.Map Name String) (Except String)
+
+runGVCalc :: GVCalc a -> (Name, M.Map Name String) ->
+    Either String (a, (Name, M.Map Name String))
+runGVCalc a = runExcept . runStateT a
 
 -- Query an M.Map in the GVCalc monad
 mlookup :: Ord k => M.Map k v -> k -> GVCalc v
