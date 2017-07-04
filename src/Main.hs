@@ -24,4 +24,4 @@ runChain :: String -> GVCalc String
 runChain sourceCode = do
     tokens <- scan  sourceCode
     ast    <- parse tokens
-    throwError "not yet implemented"
+    pp ast

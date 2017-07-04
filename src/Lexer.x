@@ -11,15 +11,14 @@ import qualified Data.Map as M
 %wrapper "monadUserState"
 
 $digit  = 0-9
-$nozero = 1-9
 $lower  = a-z
 $upper  = A-Z
 $alpha  = [$lower $upper]
 $alnum  = [$alpha $digit]
 
 tokens :-
-    $white+                ;
-    \/\/.*\n               ; -- C-style single line comments
+    $white+             ;
+    \/\/.*\n            ; -- C-style single line comments
     "fork"              { mkTK TK_Fork   }
     "fix"               { mkTK TK_Fix    }
     "accept"            { mkTK TK_Accept }
@@ -33,6 +32,8 @@ tokens :-
     "in"                { mkTK TK_In     }
     "new"               { mkTK TK_New    }
     "unit"              { mkTK TK_Unit   }
+    "true"              { mkTK TK_True   }
+    "false"             { mkTK TK_False  }
     "-"                 { mkTK TK_Minus  }
     "+"                 { mkTK TK_Plus   }
     ","                 { mkTK TK_Comma  }
@@ -43,11 +44,13 @@ tokens :-
     ")"                 { mkTK TK_RParen }
     "{"                 { mkTK TK_LCurl  }
     "}"                 { mkTK TK_RCurl  }
-    "<"                 { mkTK TK_LSqu   }
-    ">"                 { mkTK TK_RSqu   }
+    "["                 { mkTK TK_LSqu   }
+    "]"                 { mkTK TK_RSqu   }
+    "<"                 { mkTK TK_LAngle }
+    ">"                 { mkTK TK_RAngle }
     "||"                { mkTK TK_Bars   }
     $alpha [$alnum \_]* { mkName         }
-    $nozero ($digit*)   { mkNum          }
+    $digit+             { mkNum          }
     .                   { mkTK TK_Error  }
 
 {
@@ -70,6 +73,8 @@ data TokenType
     | TK_In
     | TK_New
     | TK_Unit
+    | TK_True
+    | TK_False
     | TK_Minus
     | TK_Plus
     | TK_Comma
@@ -82,6 +87,8 @@ data TokenType
     | TK_RCurl
     | TK_LSqu
     | TK_RSqu
+    | TK_LAngle
+    | TK_RAngle
     | TK_Bars
     | TK_Name Name
     | TK_Num Integer

@@ -16,9 +16,10 @@ import Control.Monad.Except (throwError)
 %name parseExps EXPS
 %name parseConfig CONFIG
 
-%left Name
-%right Plus Minus
-%nonassoc Unit
+%right Plus Minus Bars
+%nonassoc Fork Fix Accept Request Send Receive Select Case Lam Let Int New Unit
+    True False Comma Colon Dot Equal LParen RParen LCurl RCurl LSqu RSqu LAngle
+    RAngle Name
 
 %tokentype { Token      }
 %error     { parseError }
@@ -37,6 +38,8 @@ import Control.Monad.Except (throwError)
     In      { Token ( _ , TK_In      ) }
     New     { Token ( _ , TK_New     ) }
     Unit    { Token ( _ , TK_Unit    ) }
+    True    { Token ( _ , TK_True    ) }
+    False   { Token ( _ , TK_False   ) }
     Minus   { Token ( _ , TK_Minus   ) }
     Plus    { Token ( _ , TK_Plus    ) }
     Comma   { Token ( _ , TK_Comma   ) }
@@ -49,28 +52,65 @@ import Control.Monad.Except (throwError)
     RCurl   { Token ( _ , TK_RCurl   ) }
     LSqu    { Token ( _ , TK_LSqu    ) }
     RSqu    { Token ( _ , TK_RSqu    ) }
+    LAngle  { Token ( _ , TK_LAngle  ) }
+    RAngle  { Token ( _ , TK_RAngle  ) }
     Bars    { Token ( _ , TK_Bars    ) }
     Name    { Token ( _ , TK_Name _  ) }
     Num     { Token ( _ , TK_Num  _  ) }
     Error   { Token ( _ , TK_Error   ) }
 %%
 
+NAME :: { Name }
+NAME : Name { case $1 of Token (_, TK_Name n) -> n }
+
+NUM :: { Integer }
+NUM : Num { case $1 of Token (_, TK_Num n) -> n }
+
+BOOL :: { Bool }
+BOOL : True { True } | False { False }
+
+VAL :: { Val }
+VAL
+    : Fix                         { Fix           }
+    | Fork                        { Fork          }
+    | Unit                        { Unit          }
+    | Send                        { Send          }
+    | Receive                     { Receive       }
+    | Request NUM                 { Request $2    }
+    | Accept  NUM                 { Accept  $2    }
+    | LParen Plus RParen          { Plus          }
+    | LParen Minus RParen         { Minus         }
+    | Lam NAME Dot EXP            { Lam $2 $4     }
+    | LParen VAL Comma VAL RParen { ValPair $2 $4 }
+    | NAME                        { Var $1        }
+    | NUM                         { Number $1     }
+    | LParen VAL RParen           { $2            }
+
 EXP :: { Exp }
 EXP
-    : Fix  { Lit Fix  }
-    | Send { Lit Send }
+    : VAL                                  { Lit $1                      }
+    | LParen EXP Comma EXP RParen          { Pair $2 $4                  }
+    | Let NAME Comma NAME Equal EXP In EXP { Let $2 $4 $6 $8             }
+    | Select BOOL EXP                      { Select $2 $3                }
+    | Case EXP EXP EXP                     { Case $2 $3 $4               }
+    | EXPS                                 { many $1                     }
+    | EXP Plus EXP                         { App (App (Lit Plus) $1) $3  }
+    | EXP Minus EXP                        { App (App (Lit Minus) $1) $3 }
+    | LParen EXP RParen                    { $2                          }
 
 EXPS :: { [Exp] }
 EXPS : EXP EXPS { $1 : $2 } | EXP { [$1] }
 
 CONFIG :: { Config }
 CONFIG
-    : { undefined }
-    | { undefined }
+    : LAngle EXP RAngle       { Exe $2       }
+    | CONFIG Bars CONFIG      { $1 `Par` $3  }
+    | New NAME NAME In CONFIG { New $2 $3 $5 }
+    | LParen CONFIG RParen    { $2           }
 
 {
-parse :: [Token] -> GVCalc Exp
-parse = (fmap many) . parseExps
+parse :: [Token] -> GVCalc Config
+parse = parseConfig
 
 parseError :: [Token] -> GVCalc a
 parseError tokens = throwError $ case tokens of
