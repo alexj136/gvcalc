@@ -27,9 +27,12 @@ tokens :-
     "receive"           { mkTK TK_Receive}
     "select"            { mkTK TK_Select }
     "case"              { mkTK TK_Case   }
+    "of"                { mkTK TK_Of     }
+    "else"              { mkTK TK_Else   }
     "lam"               { mkTK TK_Lam    }
     "let"               { mkTK TK_Let    }
     "in"                { mkTK TK_In     }
+    "end"               { mkTK TK_End    }
     "new"               { mkTK TK_New    }
     "unit"              { mkTK TK_Unit   }
     "true"              { mkTK TK_True   }
@@ -37,6 +40,7 @@ tokens :-
     "-"                 { mkTK TK_Minus  }
     "+"                 { mkTK TK_Plus   }
     ","                 { mkTK TK_Comma  }
+    ";"                 { mkTK TK_Semi   }
     ":"                 { mkTK TK_Colon  }
     "."                 { mkTK TK_Dot    }
     "="                 { mkTK TK_Equal  }
@@ -48,6 +52,8 @@ tokens :-
     "]"                 { mkTK TK_RSqu   }
     "<"                 { mkTK TK_LAngle }
     ">"                 { mkTK TK_RAngle }
+    "<-"                { mkTK TK_LArrow }
+    "->"                { mkTK TK_RArrow }
     "||"                { mkTK TK_Bars   }
     $alpha [$alnum \_]* { mkName         }
     $digit+             { mkNum          }
@@ -68,9 +74,12 @@ data TokenType
     | TK_Receive
     | TK_Select
     | TK_Case
+    | TK_Of
+    | TK_Else
     | TK_Lam
     | TK_Let
     | TK_In
+    | TK_End
     | TK_New
     | TK_Unit
     | TK_True
@@ -78,6 +87,7 @@ data TokenType
     | TK_Minus
     | TK_Plus
     | TK_Comma
+    | TK_Semi
     | TK_Colon
     | TK_Dot
     | TK_Equal
@@ -89,6 +99,8 @@ data TokenType
     | TK_RSqu
     | TK_LAngle
     | TK_RAngle
+    | TK_LArrow
+    | TK_RArrow
     | TK_Bars
     | TK_Name Name
     | TK_Num Integer

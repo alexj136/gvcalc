@@ -4,7 +4,6 @@ import Util
 
 import Prelude hiding ((/))
 import Data.List (intersperse)
-import Data.Char (toLower)
 import qualified Data.Set as S
 import Control.Monad.State
 
@@ -14,6 +13,7 @@ data Val
     = Var Name
     | Chan Name
     | Number Integer
+    | Boolean Bool
     | Fix
     | Fork
     | Request Integer
@@ -32,7 +32,7 @@ data Exp
     | App Exp Exp
     | Pair Exp Exp
     | Let Name Name Exp Exp
-    | Select Bool Exp
+    | Select Exp Exp
     | Case Exp Exp Exp
     deriving (Show, Eq, Ord)
 
@@ -48,6 +48,7 @@ instance PrettyPrint Val where
         Var n         -> pp n
         Chan n        -> pp n
         Number i      -> return $ show i
+        Boolean b     -> return $ if b then "true" else "false"
         Fix           -> return "fix"
         Fork          -> return "fork"
         Request i     -> return $ "request " ++ show i
@@ -84,9 +85,10 @@ instance PrettyPrint Exp where
             e2str <- pp e2
             return $ "let " ++ n1str ++ ", " ++ n2str ++ " = " ++ e1str
                 ++ " in " ++ e2str
-        Select b e      -> do
-            estr <- pp e
-            return $ "select " ++ (map toLower (show b)) ++ " " ++ estr
+        Select e1 e2    -> do
+            e1str <- pp e1
+            e2str <- pp e2
+            return $ "select " ++ e1str ++ " " ++ e2str
         Case e1 e2 e3   -> do
             e1str <- pp e1
             e2str <- pp e2
@@ -131,7 +133,7 @@ instance Free Exp where
         Pair e1 e2      -> free e1 `S.union` free e2
         Let n1 n2 e1 e2 ->
             (S.delete n1 (S.delete n2 (free e1))) `S.union` free e2
-        Select _ e      -> free e
+        Select e1 e2    -> free e1 `S.union` free e2
         Case e t f      -> free e `S.union` free t `S.union` free f
 
 class Subst t where
@@ -161,6 +163,6 @@ instance Subst Exp where
             e1' <- (val / name) e1
             e2' <- (((Var n2') / n2) >=> ((Var n1') / n1) >=> (val / name)) e2
             return $ Let n1' n2' e1' e2'
-        Select b e      -> liftM (Select b) ((val / name) e)
+        Select e1 e2    -> liftM2 Select ((val / name) e1) ((val / name) e2)
         Case e t f      ->
             liftM3 Case ((val / name) e) ((val / name) t) ((val / name) f)

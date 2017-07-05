@@ -1,0 +1,1 @@
+new x y in ( < send x 10 > || < receive y > )
