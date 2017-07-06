@@ -7,8 +7,6 @@ import Data.List (intersperse)
 import qualified Data.Set as S
 import Control.Monad.State
 
-type Label = String
-
 data Val
     = Var Name
     | Chan Name
