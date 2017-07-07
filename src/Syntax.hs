@@ -164,3 +164,15 @@ instance Subst Exp where
         Select e1 e2    -> liftM2 Select ((val / name) e1) ((val / name) e2)
         Case e t f      ->
             liftM3 Case ((val / name) e) ((val / name) t) ((val / name) f)
+
+chanSub :: Name -> Name -> Config -> GVCalc Config
+chanSub to from bodyCfg = case bodyCfg of
+        Exe e            -> liftM Exe ((Var to / from) e)
+        ChanBuf c d i ms -> do
+            let c' = if from == c then to else c
+            let d' = if from == d then to else d
+            ms' <- mapM (Var to / from) ms
+            return $ ChanBuf c' d' i ms'
+        Par p q          -> liftM2 Par (chanSub to from p) (chanSub to from q)
+        New c d p        -> if from `elem` [c, d] then return bodyCfg else
+            liftM (New c d) (chanSub to from p)

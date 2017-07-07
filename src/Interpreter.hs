@@ -30,35 +30,63 @@ newtype Queue =
     Queue [Exp]
     deriving (Show, Eq, Ord)
 
-heapAppend, heapPrepend :: Heap -> Name -> Either Val Exp -> GVCalc Heap
-heapAppend (Heap heapMap) n valOrExp = do
+emptyMachine :: Machine
+emptyMachine = Machine (Heap M.empty, Queue [])
+
+insertHeapContents :: Heap -> Name -> HeapContents -> Heap
+insertHeapContents (Heap heapMap) n hc = Heap $ M.insert n hc heapMap
+
+heapAppend :: Heap -> Name -> Either Val Exp -> GVCalc Heap
+heapAppend heap@(Heap heapMap) n valOrExp = do
+    let ins = return . (insertHeapContents heap n)
     valsOrExps <- mlookup heapMap n
     case valsOrExps of
-        Vals  (firstVal, vals) -> case valOrExp of
-            Left  val -> return $ Heap $
-                M.insert n (Vals  (firstVal, vals ++ [val])) heapMap
-            Right exp -> throwError "append of expression to list of values"
-        Exps  (firstExp, exps) -> case valOrExp of
-            Right exp -> return $ Heap $
-                M.insert n (Exps  (firstExp, exps ++ [exp])) heapMap
-            Left  val -> throwError "append of value to list of expressions"
+        Vals (firstVal, vals) -> case valOrExp of
+            Left  val -> ins $ Vals (firstVal, vals ++ [val])
+            Right _   -> throwError "append of expression to list of values"
+        Exps (firstExp, exps) -> case valOrExp of
+            Right exp -> ins $ Exps (firstExp, exps ++ [exp])
+            Left  _   -> throwError "append of value to list of expressions"
         Empty -> case valOrExp of
-            Left  val -> return $ Heap $ M.insert n (Vals (val, [])) heapMap
-            Right exp -> return $ Heap $ M.insert n (Exps (exp, [])) heapMap
-heapPrepend = undefined
+            Left  val -> ins $ Vals (val, [])
+            Right exp -> ins $ Exps (exp, [])
+
+heapPrepend :: Heap -> Name -> Either Val Exp -> GVCalc Heap
+heapPrepend heap@(Heap heapMap) n valOrExp = do
+    let ins = return . (insertHeapContents heap n)
+    valsOrExps <- mlookup heapMap n
+    case valsOrExps of
+        Vals (firstVal, vals) -> case valOrExp of
+            Left  val -> ins $ Vals (val, firstVal : vals)
+            Right _   -> throwError "prepend of expression to list of values"
+        Exps (firstExp, exps) -> case valOrExp of
+            Right exp -> ins $ Exps (exp, firstExp : exps)
+            Left  _   -> throwError "prepend of value to list of expressions"
+        Empty -> case valOrExp of
+            Left  val -> ins $ Vals (val, [])
+            Right exp -> ins $ Exps (exp, [])
 
 fromConfig :: Config -> GVCalc Machine
 fromConfig cfg = do
-    (h, q) <- fc (M.empty, []) cfg
-    return $ Machine (Heap h, Queue q)
+    (_, machine) <- runStateT (fc cfg) emptyMachine
+    return machine
+
     where
-    fc :: (M.Map Name HeapContents, [Exp]) -> Config ->
-        GVCalc (M.Map Name HeapContents, [Exp])
-    fc (h, q) cfg = case cfg of
-        Exe e            -> undefined
+
+    fc :: Config -> StateT Machine GVCalc ()
+    fc cfg = case cfg of
+        Exe e            -> putQueue e
         ChanBuf c d i ms -> undefined
-        Par p q          -> undefined
-        New c d p        -> undefined
+        Par p q          -> do { fc q ; fc p }
+        New c d p        -> do
+            c'  <- lift freshName
+            d'  <- lift freshName
+            p'  <- lift $ chanSub c' c p
+            p'' <- lift $ chanSub d' d p'
+            fc p''
+
+    putQueue :: Monad m => Exp -> StateT Machine m ()
+    putQueue e = modify $ \(Machine (h, Queue q)) -> Machine (h, Queue (e : q))
 
 step :: Machine -> GVCalc (Maybe Machine)
 step (Machine (_, Queue [])) = return Nothing
