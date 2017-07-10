@@ -8,11 +8,15 @@ import Control.Monad.State
 import Control.Monad.Except
 
 newtype Machine =
-    Machine (Heap, Queue)
+    Machine (Queue, Heap, ChanPairs)
     deriving (Show, Eq, Ord)
 
 newtype Heap =
     Heap (M.Map Name HeapContents)
+    deriving (Show, Eq, Ord)
+
+newtype ChanPairs =
+    ChanPairs (M.Map Name Name)
     deriving (Show, Eq, Ord)
 
 data HeapContents
@@ -31,7 +35,7 @@ newtype Queue =
     deriving (Show, Eq, Ord)
 
 emptyMachine :: Machine
-emptyMachine = Machine (Heap M.empty, Queue [])
+emptyMachine = Machine (Queue [], Heap M.empty, ChanPairs M.empty)
 
 insertHeapContents :: Heap -> Name -> HeapContents -> Heap
 insertHeapContents (Heap heapMap) n hc = Heap $ M.insert n hc heapMap
@@ -66,6 +70,7 @@ heapPrepend heap@(Heap heapMap) n valOrExp = do
             Left  val -> ins $ Vals (val, [])
             Right exp -> ins $ Exps (exp, [])
 
+-- Create a Machine from a Config
 fromConfig :: Config -> GVCalc Machine
 fromConfig cfg = do
     (_, machine) <- runStateT (fc cfg) emptyMachine
@@ -75,8 +80,8 @@ fromConfig cfg = do
 
     fc :: Config -> StateT Machine GVCalc ()
     fc cfg = case cfg of
-        Exe e            -> putQueue e
-        ChanBuf c d i ms -> undefined
+        Exe e            -> queuePrepend e
+        ChanBuf c d i ms -> do { heapInsert c ms ; chanPairsInsert c d }
         Par p q          -> do { fc q ; fc p }
         New c d p        -> do
             c'  <- lift freshName
@@ -85,10 +90,23 @@ fromConfig cfg = do
             p'' <- lift $ chanSub d' d p'
             fc p''
 
-    putQueue :: Monad m => Exp -> StateT Machine m ()
-    putQueue e = modify $ \(Machine (h, Queue q)) -> Machine (h, Queue (e : q))
+    queuePrepend :: Monad m => Exp -> StateT Machine m ()
+    queuePrepend e = modify $ \(Machine (Queue q, h, c)) ->
+        Machine (Queue (e : q), h, c)
+
+    heapInsert :: Name -> [Val] -> StateT Machine GVCalc ()
+    heapInsert n ms = do
+        Machine (q, Heap h, c) <- get
+        lift $ assert (M.notMember n h) "Duplicate channel buffers found"
+        let hc = case ms of { [] -> Empty ; (m : ms) -> Vals (m, ms) }
+        put $ Machine (q, Heap $ M.insert n hc h, c)
+
+    chanPairsInsert :: Name -> Name -> StateT Machine GVCalc ()
+    chanPairsInsert n m = do
+        Machine (q, h, ChanPairs c) <- get
+        lift $ assert (M.notMember n c) "Duplicate channel buffers found"
+        put $ Machine (q, h, ChanPairs $ M.insert n m c)
 
 step :: Machine -> GVCalc (Maybe Machine)
-step (Machine (_, Queue [])) = return Nothing
-step machine@(Machine (heap@(Heap heapMap), q@(Queue (qlist@(qhead:qtail))))) =
-    undefined
+step (Machine (Queue []           , _     , _          )) = return Nothing
+step (Machine (Queue (qhead:qtail), Heap h, ChanPairs c)) = undefined

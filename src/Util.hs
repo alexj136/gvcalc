@@ -78,6 +78,10 @@ freshNameReplacing rn = do
     put (after fn, M.insert fn (rnString ++ "'") nmap)
     return fn
 
+-- Perform a consistency check, and error out with the given string if it fails.
+assert :: Bool -> String -> GVCalc ()
+assert b s = if b then return () else throwError s
+
 --------------------------------------------------------------------------------
 -- Misc convenience functions
 --------------------------------------------------------------------------------
