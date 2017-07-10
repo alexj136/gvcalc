@@ -12,23 +12,12 @@ newtype Machine =
     deriving (Show, Eq, Ord)
 
 newtype Heap =
-    Heap (M.Map Name HeapContents)
+    Heap (M.Map Name [Val])
     deriving (Show, Eq, Ord)
 
 newtype ChanPairs =
     ChanPairs (M.Map Name Name)
     deriving (Show, Eq, Ord)
-
-data HeapContents
-    = Empty
-    | Vals (Val, [Val])
-    | Exps (Exp, [Exp])
-    deriving (Eq, Ord)
-
-instance Show HeapContents where
-    show Empty = "Empty"
-    show (Vals (v, vs)) = "Vals " ++ show (v : vs)
-    show (Exps (e, es)) = "Exps " ++ show (e : es)
 
 newtype Queue =
     Queue [Exp]
@@ -37,38 +26,33 @@ newtype Queue =
 emptyMachine :: Machine
 emptyMachine = Machine (Queue [], Heap M.empty, ChanPairs M.empty)
 
-insertHeapContents :: Heap -> Name -> HeapContents -> Heap
-insertHeapContents (Heap heapMap) n hc = Heap $ M.insert n hc heapMap
+getQueue :: Monad m => StateT Machine m Queue
+getQueue = do { Machine (q, _, _) <- get ; return q }
 
-heapAppend :: Heap -> Name -> Either Val Exp -> GVCalc Heap
-heapAppend heap@(Heap heapMap) n valOrExp = do
-    let ins = return . (insertHeapContents heap n)
-    valsOrExps <- mlookup heapMap n
-    case valsOrExps of
-        Vals (firstVal, vals) -> case valOrExp of
-            Left  val -> ins $ Vals (firstVal, vals ++ [val])
-            Right _   -> throwError "append of expression to list of values"
-        Exps (firstExp, exps) -> case valOrExp of
-            Right exp -> ins $ Exps (firstExp, exps ++ [exp])
-            Left  _   -> throwError "append of value to list of expressions"
-        Empty -> case valOrExp of
-            Left  val -> ins $ Vals (val, [])
-            Right exp -> ins $ Exps (exp, [])
+putQueue :: Monad m => Queue -> StateT Machine m ()
+putQueue q = modify $ \(Machine (_, h, c)) -> Machine (q, h, c)
 
-heapPrepend :: Heap -> Name -> Either Val Exp -> GVCalc Heap
-heapPrepend heap@(Heap heapMap) n valOrExp = do
-    let ins = return . (insertHeapContents heap n)
-    valsOrExps <- mlookup heapMap n
-    case valsOrExps of
-        Vals (firstVal, vals) -> case valOrExp of
-            Left  val -> ins $ Vals (val, firstVal : vals)
-            Right _   -> throwError "prepend of expression to list of values"
-        Exps (firstExp, exps) -> case valOrExp of
-            Right exp -> ins $ Exps (exp, firstExp : exps)
-            Left  _   -> throwError "prepend of value to list of expressions"
-        Empty -> case valOrExp of
-            Left  val -> ins $ Vals (val, [])
-            Right exp -> ins $ Exps (exp, [])
+queuePrepend :: Monad m => Exp -> StateT Machine m ()
+queuePrepend e = modify $ \(Machine (Queue q, h, c)) ->
+    Machine (Queue (e : q), h, c)
+
+queueAppend :: Monad m => Exp -> StateT Machine m ()
+queueAppend e = modify $ \(Machine (Queue q, h, c)) ->
+    Machine (Queue (q ++ [e]), h, c)
+
+getHeap :: Monad m => StateT Machine m Heap
+getHeap = do { Machine (_, h, _) <- get ; return h }
+
+putHeap :: Monad m => Heap -> StateT Machine m ()
+putHeap h = modify $ \(Machine (q, _, c)) -> Machine (q, h, c)
+
+putHeapContents :: Monad m => Name -> [Val] -> StateT Machine m ()
+putHeapContents n vs = do
+    Heap heap <- getHeap
+    putHeap $ Heap $ M.insert n vs heap
+
+getChanPairs :: Monad m => StateT Machine m ChanPairs
+getChanPairs = do { Machine (_, _, c) <- get ; return c }
 
 -- Create a Machine from a Config
 fromConfig :: Config -> GVCalc Machine
@@ -90,16 +74,11 @@ fromConfig cfg = do
             p'' <- lift $ chanSub d' d p'
             fc p''
 
-    queuePrepend :: Monad m => Exp -> StateT Machine m ()
-    queuePrepend e = modify $ \(Machine (Queue q, h, c)) ->
-        Machine (Queue (e : q), h, c)
-
     heapInsert :: Name -> [Val] -> StateT Machine GVCalc ()
-    heapInsert n ms = do
+    heapInsert n vs = do
         Machine (q, Heap h, c) <- get
         lift $ assert (M.notMember n h) "Duplicate channel buffers found"
-        let hc = case ms of { [] -> Empty ; (m : ms) -> Vals (m, ms) }
-        put $ Machine (q, Heap $ M.insert n hc h, c)
+        put $ Machine (q, Heap $ M.insert n vs h, c)
 
     chanPairsInsert :: Name -> Name -> StateT Machine GVCalc ()
     chanPairsInsert n m = do
@@ -110,3 +89,38 @@ fromConfig cfg = do
 step :: Machine -> GVCalc (Maybe Machine)
 step (Machine (Queue []           , _     , _          )) = return Nothing
 step (Machine (Queue (qhead:qtail), Heap h, ChanPairs c)) = undefined
+
+reduceExpTop :: Exp -> StateT Machine GVCalc Exp
+reduceExpTop exp = case exp of
+    App (App (Lit Send) (Lit v)) (Lit (Var c)) -> do
+        handleSend v c
+        return (Lit (Var c))
+    App (Lit Receive) (Lit (Var c)) -> undefined
+
+    App e1 e2       -> undefined
+    Pair e1 e2      -> undefined
+    Let n1 n2 e1 e2 -> undefined
+    Select e1 e2    -> undefined
+    Case e1 e2 e3   -> undefined
+    Lit v           -> do
+        ppexp <- lift $ pp exp
+        lift $ throwError $ "Irreducible floating value: " ++ ppexp
+
+reduceExpInner :: Exp -> Exp -> StateT Machine GVCalc Exp
+reduceExpInner fullExp partExp = case partExp of
+    App e1 e2       -> undefined
+    Pair e1 e2      -> undefined
+    Let n1 n2 e1 e2 -> undefined
+    Select e1 e2    -> undefined
+    Case e1 e2 e3   -> undefined
+    Lit v           -> undefined
+
+-- Send a given val over a given channel, placing it in the message buffer for
+-- that channel
+handleSend :: Val -> Name -> StateT Machine GVCalc ()
+handleSend v c = do
+    ChanPairs pairs <- getChanPairs
+    bufferId        <- lift $ mlookup pairs c
+    Heap heap       <- getHeap
+    bufferContents  <- lift $ mlookup heap bufferId
+    putHeapContents bufferId (bufferContents ++ [v])
