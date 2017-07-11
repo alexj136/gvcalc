@@ -14,11 +14,11 @@ main = do
     args <- getArgs
     if length args /= 1 then do
         putStrLn "Please supply a single filename."
-        return ()
     else do
         sourceCode <- readFile (head args)
-        putStrLn $ show $ runGVCalc (runChain sourceCode) (Name 0, M.empty)
-        return ()
+        putStrLn $ case runGVCalc (runChain sourceCode) (Name 0, M.empty) of
+            Left   err     -> err
+            Right (str, _) -> str
 
 runChain :: String -> GVCalc String
 runChain sourceCode = do

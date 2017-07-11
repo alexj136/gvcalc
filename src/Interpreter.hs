@@ -67,8 +67,8 @@ fromConfig cfg = do
             putHeapContents c (d, i, ms)
         Par p q          -> do { fc q ; fc p }
         New c d p        -> do
-            c'  <- lift freshName
-            d'  <- lift freshName
+            c'  <- lift $ freshNameReplacing c
+            d'  <- lift $ freshNameReplacing d
             p'  <- lift $ chanSub c' c p
             p'' <- lift $ chanSub d' d p'
             fc p''
