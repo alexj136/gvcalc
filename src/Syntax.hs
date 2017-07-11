@@ -102,8 +102,8 @@ instance PrettyPrint Config where
             n1str <- pp n1
             n2str <- pp n2
             vstrs <- mapM pp vs
-            return $ n1str ++ " |-> (" ++ n2str ++ ", " ++ show i ++ ", "
-                ++ (concat (intersperse " " vstrs)) ++ ")"
+            return $ n1str ++ " -> (" ++ n2str ++ ", " ++ show i ++ ", ["
+                ++ (concat (intersperse " " vstrs)) ++ "])"
         Par c1 c2          -> do
             c1str <- pp c1
             c2str <- pp c2

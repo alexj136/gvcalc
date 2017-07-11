@@ -1,1 +1,6 @@
-new x y in ( < send x 10 > || < receive y > )
+new x y in
+    (  x -> (y, 10, [])
+    || y -> (x, 10, [])
+    || < send 10 x >
+    || < receive y >
+    )

@@ -89,6 +89,17 @@ VAL
     | True                        { Boolean True  }
     | False                       { Boolean False }
 
+VALLIST :: { [Val] }
+VALLIST
+    : LSqu RSqu            { []      }
+    | LSqu VAL VALLISTCONT { $2 : $3 }
+
+VALLISTCONT :: { [Val] }
+VALLISTCONT
+    : Comma VAL VALLISTCONT { $2 : $3 }
+    | RSqu                  { []      }
+
+
 EXP :: { Exp }
 EXP : EXPOPTS { many $1 }
 
@@ -106,10 +117,12 @@ EXPOPTS : EXPOPT EXPOPTS { $1 : $2 } | EXPOPT { [$1] }
 
 CONFIG :: { Config }
 CONFIG
-    : LAngle EXP RAngle       { Exe $2       }
-    | CONFIG Bars CONFIG      { $1 `Par` $3  }
-    | New NAME NAME In CONFIG { New $2 $3 $5 }
-    | LParen CONFIG RParen    { $2           }
+    : LAngle EXP RAngle       { Exe $2              }
+    | CONFIG Bars CONFIG      { $1 `Par` $3         }
+    | New NAME NAME In CONFIG { New $2 $3 $5        }
+    | LParen CONFIG RParen    { $2                  }
+    | NAME RArrow LParen NAME Comma NUM Comma VALLIST RParen
+                              { ChanBuf $1 $4 $6 $8 }
 
 {
 parse :: [Token] -> GVCalc Config

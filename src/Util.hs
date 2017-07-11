@@ -27,7 +27,7 @@ after (Name n) = Name (n + 1)
 instance PrettyPrint Name where
     pp n = do
         (_, nmap) <- get
-        mlookup nmap n
+        return $ M.findWithDefault (show n) n nmap
 
 --------------------------------------------------------------------------------
 -- Source code positions

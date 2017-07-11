@@ -22,6 +22,8 @@ main = do
 
 runChain :: String -> GVCalc String
 runChain sourceCode = do
-    tokens <- scan  sourceCode
-    ast    <- parse tokens
-    pp ast
+    tokens   <- scan  sourceCode
+    ast      <- parse tokens
+    machine  <- fromConfig ast
+    machine' <- run machine
+    pp (toConfig machine')
