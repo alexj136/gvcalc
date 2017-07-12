@@ -1,4 +1,4 @@
-module Interpreter where
+module Interpreter (fromConfig, toConfig, run) where
 
 import Util
 import Syntax
@@ -8,20 +8,67 @@ import qualified Data.Map as M
 import Control.Monad.State
 import Control.Monad.Except
 
-newtype Machine =
-    Machine (Queue, Heap)
+data Context
+    = Hole
+    | CLet Name Name Context Exp
+    | CCase Context Exp Exp
+    | CSelectL Context Exp
+    | CSelectR Val     Context
+    | CAppL    Context Exp
+    | CAppR    Val     Context
+    | CPairL   Context Exp
+    | CPairR   Val     Context
     deriving (Show, Eq, Ord)
 
-newtype Heap =
-    Heap (M.Map Name (Name, Integer, [Val]))
+apply :: Context -> Exp -> Exp
+apply ctx exp = case ctx of
+    Hole           -> exp
+    CLet n1 n2 c e -> Let n1 n2 (apply c exp) e
+    CCase c e2 e3  -> Case (apply c exp) e2 e3
+    CSelectL c e   -> Select (apply c exp) e
+    CSelectR v c   -> Select (Lit v) (apply c exp)
+    CAppL    c e   -> App (apply c exp) e
+    CAppR    v c   -> App (Lit v) (apply c exp)
+    CPairL   c e   -> Pair (apply c exp) e
+    CPairR   v c   -> Pair (Lit v) (apply c exp)
+
+extend ::  Context -> Context -> Context
+extend outer inner = case outer of
+    Hole           -> inner
+    CLet n1 n2 c e -> CLet n1 n2 (extend c inner) e
+    CCase c e2 e3  -> CCase (extend c inner) e2 e3
+    CSelectL c e   -> CSelectL (extend c inner) e
+    CSelectR v c   -> CSelectR v (extend c inner)
+    CAppL    c e   -> CAppL (extend c inner) e
+    CAppR    v c   -> CAppR v (extend c inner)
+    CPairL   c e   -> CPairL (extend c inner) e
+    CPairR   v c   -> CPairR v (extend c inner)
+
+newtype Machine =
+    Machine (Queue, Heap)
     deriving (Show, Eq, Ord)
 
 newtype Queue =
     Queue [Exp]
     deriving (Show, Eq, Ord)
 
+newtype Heap =
+    Heap (M.Map Name HeapContents)
+    deriving (Show, Eq, Ord)
+
+type HeapContents =
+    ( Name                          -- The dual channel
+    , Integer                       -- Msg list maximum size
+    , EitherList Val     Context    -- Msg list or waiting receivers
+    , EitherList (Context, Integer) -- Waiting requesters or accepters
+        (Context, Integer)
+    )
+
 emptyMachine :: Machine
 emptyMachine = Machine (Queue [], Heap M.empty)
+
+runnable :: Machine -> Bool
+runnable (Machine (Queue q, _)) = not $ null q
 
 getQueue :: Monad m => StateT Machine m Queue
 getQueue = do { Machine (q, _) <- get ; return q }
@@ -35,20 +82,52 @@ getHeap = do { Machine (_, h) <- get ; return h }
 putHeap :: Monad m => Heap -> StateT Machine m ()
 putHeap h = modify $ \(Machine (q, _)) -> Machine (q, h)
 
-getHeapContents :: Name -> StateT Machine GVCalc (Name, Integer, [Val])
-getHeapContents n = do
-    Heap heap <- getHeap
-    lift $ mlookup heap n
+getHeapContents :: Name -> StateT Machine GVCalc HeapContents
+getHeapContents n = do { Heap h <- getHeap ; lift $ mlookup h n }
 
-putHeapContents :: Monad m => Name -> (Name, Integer, [Val]) ->
-    StateT Machine m ()
+putHeapContents :: Monad m => Name -> HeapContents -> StateT Machine m ()
 putHeapContents n hc = do
-    Heap heap <- getHeap
-    putHeap $ Heap $ M.insert n hc heap
+    Heap h <- getHeap
+    putHeap $ Heap $ M.insert n hc h
 
 toConfig :: Machine -> Config
-toConfig (Machine (Queue q, Heap h)) = foldr1 Par $
-    map Exe q ++ map (\(c, (d, i, vs)) -> ChanBuf c d i vs) (M.toList h)
+toConfig (Machine (Queue q, Heap h)) = let
+
+    queueConfigs :: [Config]
+    queueConfigs = map Exe q
+
+    heapConfigs :: [Config]
+    heapConfigs = concat $ map heapContentsToConfigs (M.toList h)
+
+    heapContentsToConfigs :: (Name, HeapContents) -> [Config]
+    heapContentsToConfigs (c, (d, i, mor, roa)) = let
+
+        chanBuf :: Config
+        chanBuf = ChanBuf c d i $ case mor of Lefts (m, ms) -> (m:ms)
+
+        rcvQ :: [Config]
+        rcvQ = case toEither mor of
+            Left  _    -> []
+            Right ctxs ->
+                map (Exe . (flip apply) (App (Lit Receive) (Lit (Var c)))) ctxs
+
+        roaConfigs :: [Config]
+        roaConfigs = let
+
+            buildExp :: (Integer -> Val) -> (Context, Integer) -> Exp
+            buildExp f (ctx, j) = apply ctx (App (Lit (f j)) (Lit (Var c)))
+
+            exps :: [Exp]
+            exps = either
+                (map (buildExp Request))
+                (map (buildExp Accept ))
+                (toEither roa)
+            in
+            map Exe exps
+        in
+        chanBuf : rcvQ ++ roaConfigs
+    in
+    foldr1 Par $ queueConfigs ++ heapConfigs
 
 -- Create a Machine from a Config
 fromConfig :: Config -> GVCalc Machine
@@ -60,11 +139,13 @@ fromConfig cfg = do
 
     fc :: Config -> StateT Machine GVCalc ()
     fc cfg = case cfg of
-        Exe e            -> do { Queue q <- getQueue ; putQueue (Queue (e:q)) }
+        Exe e            -> do
+            Queue q <- getQueue
+            putQueue (Queue (e:q))
         ChanBuf c d i ms -> do
             Heap h <- getHeap
             lift $ assert (M.notMember c h) "Duplicate channel buffers found"
-            putHeapContents c (d, i, ms)
+            putHeapContents c (d, i, lefts ms, Empty)
         Par p q          -> do { fc q ; fc p }
         New c d p        -> do
             c'  <- lift $ freshNameReplacing c
@@ -74,77 +155,7 @@ fromConfig cfg = do
             fc p''
 
 run :: Machine -> GVCalc Machine
-run m = do
-    (progress, m') <- runStateT step m
-    (if progress then run else return) m'
+run m = if runnable m then runStateT step m >>= run . snd else return m
 
-step :: StateT Machine GVCalc Bool
-step = do
-    Queue q <- getQueue
-    q' <- mapM reduce q
-    putQueue $ Queue q'
-    return $ q /= q'
-
-reduce :: Exp -> StateT Machine GVCalc Exp
-reduce exp = case exp of
-
-    App (Lit (Lam x e)) (Lit v) -> lift $ (v/x) e
-    App (Lit Fix) (Lit (Lam x e)) -> lift $ ((Lam x e)/x) e
-    App (App (Lit Send) (Lit v)) (Lit (Var c)) -> do
-        deliver v c
-        return (Lit (Var c))
-    App (Lit Receive) (Lit (Var c)) -> do
-        m <- collect c
-        case m of
-            Just v  -> return $ Pair (Lit v) (Lit (Var c))
-            Nothing -> return exp
-    App  (Lit v) e  -> reduce e  >>= \e'  -> return $ App  (Lit v) e'
-    App  e1 e2      -> reduce e1 >>= \e1' -> return $ App  e1' e2
-
-    Pair (Lit v1) (Lit v2) -> return $ Lit $ ValPair v1 v2
-    Pair (Lit v) e  -> reduce e  >>= \e'  -> return $ Pair (Lit v) e'
-    Pair e1      e2 -> reduce e1 >>= \e1' -> return $ Pair e1' e2
-
-    Let n1 n2 (Lit (ValPair v1 v2)) e -> lift $ ((v1/n1) >=> (v2/n2)) e
-    Let n1 n2 e1 e2 -> reduce e1 >>= \e1' -> return $ Let n1 n2 e1' e2
-
-    Select (Lit v) (Lit (Var c)) -> do
-        deliver v c
-        return (Lit (Var c))
-    Select (Lit v) e  -> reduce e  >>= \e'  -> return $ Select (Lit v) e'
-    Select e1      e2 -> reduce e1 >>= \e1' -> return $ Select e1' e2
-
-    Case (Lit (Var c)) e1 e2 -> do
-        m <- collect c
-        case m of
-            Just (Boolean True ) -> return $ App e1 (Lit (Var c))
-            Just (Boolean False) -> return $ App e2 (Lit (Var c))
-            Just (_            ) -> lift $
-                throwError "Non-boolean collected by case expression"
-            Nothing -> return exp
-    Case e1 e2 e3 -> reduce e1 >>= \e1' -> return $ Case e1' e2 e3
-
-    Lit v -> return exp
-
-    where
-
-    -- Send a given val over a given channel, placing it in the message buffer
-    -- for that channel
-    deliver :: Val -> Name -> StateT Machine GVCalc ()
-    deliver v c = do
-        (d , _, _ ) <- getHeapContents c
-        (c', i, vs) <- getHeapContents d
-        lift $ assert (c == c') "Channel duality inconsistency"
-        lift $ assert (toInteger (length vs) < i) "Buffer size exceeded"
-        putHeapContents d (c', i, vs ++ [v])
-
-    -- inverse of deliver - collect a message from a given buffer for
-    -- substitution into an expression
-    collect :: Name -> StateT Machine GVCalc (Maybe Val)
-    collect c = do
-        contents <- getHeapContents c
-        case contents of
-            (_, _, []    ) -> return Nothing
-            (d, i, (m:ms)) -> do
-                putHeapContents c (d, i, ms)
-                return $ Just m
+step :: StateT Machine GVCalc ()
+step = undefined

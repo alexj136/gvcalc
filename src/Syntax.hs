@@ -9,7 +9,6 @@ import Control.Monad.State
 
 data Val
     = Var Name
-    | Chan Name
     | Number Integer
     | Boolean Bool
     | Fix
@@ -44,7 +43,6 @@ data Config
 instance PrettyPrint Val where
     pp val = case val of
         Var n         -> pp n
-        Chan n        -> pp n
         Number i      -> return $ show i
         Boolean b     -> return $ if b then "true" else "false"
         Fix           -> return "fix"
