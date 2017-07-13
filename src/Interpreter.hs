@@ -45,7 +45,7 @@ extend outer inner = case outer of
     CPairR   v c   -> CPairR v (extend c inner)
 
 newtype Machine =
-    Machine (Queue, Heap)
+    Machine (Queue, Heap, Garbage)
     deriving (Show, Eq, Ord)
 
 newtype Queue =
@@ -54,6 +54,10 @@ newtype Queue =
 
 newtype Heap =
     Heap (M.Map Name HeapContents)
+    deriving (Show, Eq, Ord)
+
+newtype Garbage =
+    Garbage [Exp]
     deriving (Show, Eq, Ord)
 
 type HeapContents =
@@ -65,22 +69,37 @@ type HeapContents =
     )
 
 emptyMachine :: Machine
-emptyMachine = Machine (Queue [], Heap M.empty)
+emptyMachine = Machine (Queue [], Heap M.empty, Garbage [])
 
 runnable :: Machine -> Bool
-runnable (Machine (Queue q, _)) = not $ null q
+runnable (Machine (Queue q, _, _)) = not $ null q
 
 getQueue :: Monad m => StateT Machine m Queue
-getQueue = do { Machine (q, _) <- get ; return q }
+getQueue = do { Machine (q, _, _) <- get ; return q }
 
 putQueue :: Monad m => Queue -> StateT Machine m ()
-putQueue q = modify $ \(Machine (_, h)) -> Machine (q, h)
+putQueue q = modify $ \(Machine (_, h, g)) -> Machine (q, h, g)
+
+enqueueBack :: Monad m => Exp -> StateT Machine m ()
+enqueueBack e = modify $ \(Machine (Queue q, h, g)) ->
+    Machine (Queue (q ++ [e]), h, g)
+
+enqueueFront :: Monad m => Exp -> StateT Machine m ()
+enqueueFront e = modify $ \(Machine (Queue q, h, g)) ->
+    Machine (Queue (e:q), h, g)
+
+dequeue :: StateT Machine GVCalc Exp
+dequeue = do
+    Machine (Queue q, h, g) <- get
+    lift $ assert (not (null q)) "Dequeue of empty queue"
+    put $ Machine (Queue (tail q), h, g)
+    return (head q)
 
 getHeap :: Monad m => StateT Machine m Heap
-getHeap = do { Machine (_, h) <- get ; return h }
+getHeap = do { Machine (_, h, _) <- get ; return h }
 
 putHeap :: Monad m => Heap -> StateT Machine m ()
-putHeap h = modify $ \(Machine (q, _)) -> Machine (q, h)
+putHeap h = modify $ \(Machine (q, _, g)) -> Machine (q, h, g)
 
 getHeapContents :: Name -> StateT Machine GVCalc HeapContents
 getHeapContents n = do { Heap h <- getHeap ; lift $ mlookup h n }
@@ -90,20 +109,91 @@ putHeapContents n hc = do
     Heap h <- getHeap
     putHeap $ Heap $ M.insert n hc h
 
+getMessage :: Name -> StateT Machine GVCalc (Maybe Val)
+getMessage c = do
+    (d, i, mor, roa) <- getHeapContents c
+    case mor of
+        Lefts (m, ms) -> do
+            let mor' = if null ms then Empty else Lefts (head ms, tail ms)
+            putHeapContents c (d, i, mor', roa)
+            return $ Just m
+        _ -> return Nothing
+
+getWaitingReceive :: Name -> StateT Machine GVCalc (Maybe Context)
+getWaitingReceive c = do
+    (d, i, mor, roa) <- getHeapContents c
+    case mor of
+        Rights (r, rs) -> do
+            let mor' = if null rs then Empty else Rights (head rs, tail rs)
+            putHeapContents c (d, i, mor', roa)
+            return $ Just r
+        _ -> return Nothing
+
+getWaitingRequest :: Name -> StateT Machine GVCalc (Maybe (Context, Integer))
+getWaitingRequest c = do
+    (d, i, mor, roa) <- getHeapContents c
+    case roa of
+        Lefts (r, rs) -> do
+            let roa' = if null rs then Empty else Lefts (head rs, tail rs)
+            putHeapContents c (d, i, mor, roa')
+            return $ Just r
+        _ -> return Nothing
+
+getWaitingAccept :: Name -> StateT Machine GVCalc (Maybe (Context, Integer))
+getWaitingAccept c = do
+    (d, i, mor, roa) <- getHeapContents c
+    case roa of
+        Rights (a, as) -> do
+            let roa' = if null as then Empty else Rights (head as, tail as)
+            putHeapContents c (d, i, mor, roa')
+            return $ Just a
+        _ -> return Nothing
+
+putMessage :: Name -> Val -> StateT Machine GVCalc ()
+putMessage c v = do
+    (d, i, mor, roa) <- getHeapContents c
+    mor' <- lift $ elAppend (Left v) mor
+    putHeapContents c (d, i, mor', roa)
+
+putWaitingReceive :: Name -> Context -> StateT Machine GVCalc ()
+putWaitingReceive c ctx = do
+    (d, i, mor, roa) <- getHeapContents c
+    mor' <- lift $ elAppend (Right ctx) mor
+    putHeapContents c (d, i, mor', roa)
+
+putWaitingRequest :: Name -> (Context, Integer) -> StateT Machine GVCalc ()
+putWaitingRequest c r = do
+    (d, i, mor, roa) <- getHeapContents c
+    roa' <- lift $ elAppend (Left r) roa
+    putHeapContents c (d, i, mor, roa')
+
+putWaitingAccept :: Name -> (Context, Integer) -> StateT Machine GVCalc ()
+putWaitingAccept c a = do
+    (d, i, mor, roa) <- getHeapContents c
+    roa' <- lift $ elAppend (Right a) roa
+    putHeapContents c (d, i, mor, roa')
+
+putGarbage :: Monad m => Exp -> StateT Machine m ()
+putGarbage e = modify $ \(Machine (h, q, Garbage g)) ->
+    Machine (h, q, Garbage (e:g))
+
 toConfig :: Machine -> Config
-toConfig (Machine (Queue q, Heap h)) = let
+toConfig (Machine (Queue queue, Heap heap, Garbage garbage)) = let
 
     queueConfigs :: [Config]
-    queueConfigs = map Exe q
+    queueConfigs = map Exe queue
 
     heapConfigs :: [Config]
-    heapConfigs = concat $ map heapContentsToConfigs (M.toList h)
+    heapConfigs = concat $ map heapContentsToConfigs (M.toList heap)
+
+    garbageConfigs :: [Config]
+    garbageConfigs = map Exe garbage
 
     heapContentsToConfigs :: (Name, HeapContents) -> [Config]
     heapContentsToConfigs (c, (d, i, mor, roa)) = let
 
         chanBuf :: Config
-        chanBuf = ChanBuf c d i $ case mor of Lefts (m, ms) -> (m:ms)
+        chanBuf = ChanBuf c d i $ either id (\_ -> []) (toEither mor)
 
         rcvQ :: [Config]
         rcvQ = case toEither mor of
@@ -127,7 +217,7 @@ toConfig (Machine (Queue q, Heap h)) = let
         in
         chanBuf : rcvQ ++ roaConfigs
     in
-    foldr1 Par $ queueConfigs ++ heapConfigs
+    foldr1 Par $ queueConfigs ++ heapConfigs ++ garbageConfigs
 
 -- Create a Machine from a Config
 fromConfig :: Config -> GVCalc Machine
@@ -158,4 +248,35 @@ run :: Machine -> GVCalc Machine
 run m = if runnable m then runStateT step m >>= run . snd else return m
 
 step :: StateT Machine GVCalc ()
-step = undefined
+step = dequeue >>= handleExp Hole
+
+handleExp :: Context -> Exp -> StateT Machine GVCalc ()
+handleExp ctx exp = case exp of
+
+    App (Lit (Lam x e)) (Lit v) -> lift ((v/x) e) >>= handleExp ctx
+    --App (Lit Fix) (Lit (Lam x e)) -> lift (((App (Lit Fix) (Lam x e))/x) e) >>= handleExp ctx
+    App (App (Lit Send) (Lit v)) (Lit (Var c)) -> do
+        maybeRcv <- getWaitingReceive c
+        case maybeRcv of
+            Nothing  -> putMessage c v
+            Just rcv -> enqueueBack (apply rcv (Lit v))
+        enqueueFront (apply ctx (Lit (Var c)))
+    App (Lit Receive) (Lit (Var c)) -> undefined
+    App (Lit v) e  -> undefined
+    App e1 e2      -> undefined
+
+    Pair (Lit v1) (Lit v2) -> undefined
+    Pair (Lit v) e  -> undefined
+    Pair e1      e2 -> undefined
+
+    Let n1 n2 (Lit (ValPair v1 v2)) e -> undefined
+    Let n1 n2 e1 e2 -> undefined
+
+    Select (Lit v) (Lit (Var c)) -> undefined
+    Select (Lit v) e  -> undefined
+    Select e1      e2 -> undefined
+
+    Case (Lit (Var c)) e1 e2 -> undefined
+    Case e1 e2 e3 -> undefined
+
+    _ -> putGarbage (apply ctx exp)
