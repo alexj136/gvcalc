@@ -1,6 +1,6 @@
 new x y in
     (  x -> (y, 10, [])
     || y -> (x, 10, [])
-    || < send 10 x >
-    || < receive y >
+    || < let u, d = (unit, send 10 x) in receive d >
+    || < let v, c = receive y in send v c  >
     )

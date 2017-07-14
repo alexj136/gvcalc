@@ -173,6 +173,9 @@ putWaitingAccept c a = do
     roa' <- lift $ elAppend (Right a) roa
     putHeapContents c (d, i, mor, roa')
 
+twinChannel :: Name -> StateT Machine GVCalc Name
+twinChannel c = do { (d, _, _, _) <- getHeapContents c ; return d }
+
 putGarbage :: Monad m => Exp -> StateT Machine m ()
 putGarbage e = modify $ \(Machine (h, q, Garbage g)) ->
     Machine (h, q, Garbage (e:g))
@@ -254,23 +257,31 @@ handleExp :: Context -> Exp -> StateT Machine GVCalc ()
 handleExp ctx exp = case exp of
 
     App (Lit (Lam x e)) (Lit v) -> lift ((v/x) e) >>= handleExp ctx
-    --App (Lit Fix) (Lit (Lam x e)) -> lift (((App (Lit Fix) (Lam x e))/x) e) >>= handleExp ctx
+    --App (Lit Fix) (Lit (Lam x e)) ->
+    --    lift (((App (Lit Fix) (Lam x e))/x) e) >>= handleExp ctx
     App (App (Lit Send) (Lit v)) (Lit (Var c)) -> do
-        maybeRcv <- getWaitingReceive c
+        d <- twinChannel c
+        maybeRcv <- getWaitingReceive d
         case maybeRcv of
-            Nothing  -> putMessage c v
-            Just rcv -> enqueueBack (apply rcv (Lit v))
-        enqueueFront (apply ctx (Lit (Var c)))
-    App (Lit Receive) (Lit (Var c)) -> undefined
-    App (Lit v) e  -> undefined
-    App e1 e2      -> undefined
+            Nothing  -> putMessage d v
+            Just rcv -> enqueueBack (rcv `apply` Lit v)
+        enqueueFront (ctx `apply` Lit (Var c))
+    App (Lit Receive) (Lit (Var c)) -> do
+        maybeMsg <- getMessage c
+        case maybeMsg of
+            Nothing  -> putWaitingReceive c (ctx `extend` CPairL Hole (Lit (Var c)))
+            Just msg -> enqueueFront (ctx `apply` Pair (Lit msg) (Lit (Var c)))
+    App (Lit v) e  -> handleExp (ctx `extend` CAppR v    Hole) e
+    App e1      e2 -> handleExp (ctx `extend` CAppL Hole e2  ) e1
 
-    Pair (Lit v1) (Lit v2) -> undefined
-    Pair (Lit v) e  -> undefined
-    Pair e1      e2 -> undefined
+    Pair (Lit v1) (Lit v2) -> enqueueFront (ctx `apply` Lit (ValPair v1 v2))
+    Pair (Lit v)  e        -> handleExp (ctx `extend` CPairR v    Hole) e
+    Pair e1       e2       -> handleExp (ctx `extend` CPairL Hole e2  ) e1
 
-    Let n1 n2 (Lit (ValPair v1 v2)) e -> undefined
-    Let n1 n2 e1 e2 -> undefined
+    Let n1 n2 (Lit (ValPair v1 v2)) e -> do
+        e' <- lift $ ((v1/n1) >=> (v2/n2)) e
+        enqueueFront (ctx `apply` e')
+    Let n1 n2 e1 e2 -> handleExp (ctx `extend` CLet n1 n2 Hole e2) e1
 
     Select (Lit v) (Lit (Var c)) -> undefined
     Select (Lit v) e  -> undefined
