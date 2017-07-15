@@ -108,14 +108,6 @@ toEither Empty            = Left  []
 toEither (Lefts  (a, as)) = Left  (a:as)
 toEither (Rights (b, bs)) = Right (b:bs)
 
-elPrepend :: Either a b -> EitherList a b -> GVCalc (EitherList a b)
-elPrepend eab bdlab = case (eab, bdlab) of
-    (Left  a, Empty          ) -> return $ Lefts  (a, []   )
-    (Right b, Empty          ) -> return $ Rights (b, []   )
-    (Left  a, Lefts  (a1, as)) -> return $ Lefts  (a, a1:as)
-    (Right b, Rights (b1, bs)) -> return $ Rights (b, b1:bs)
-    (_      , _              ) -> throwError "EitherList direction mismatch"
-
 elAppend :: Either a b -> EitherList a b -> GVCalc (EitherList a b)
 elAppend eab bdlab = case (eab, bdlab) of
     (Left  a, Empty          ) -> return $ Lefts  (a, []        )
@@ -124,49 +116,15 @@ elAppend eab bdlab = case (eab, bdlab) of
     (Right b, Rights (b1, bs)) -> return $ Rights (b1, bs ++ [b])
     (_      , _              ) -> throwError "EitherList direction mismatch"
 
-elHeadSplitLeft :: EitherList a b -> GVCalc (a, EitherList a b)
-elHeadSplitLeft (Lefts (a, []     )) = return (a, Empty         )
-elHeadSplitLeft (Lefts (a, (a1:as))) = return (a, Lefts (a1, as))
-elHeadSplitLeft _ = throwError "elHeadSplitLeft of Rights or Empty EitherList"
+elHeadLeft :: EitherList a b -> (Maybe a, EitherList a b)
+elHeadLeft (Lefts (a, []     )) = (Just a, Empty         )
+elHeadLeft (Lefts (a, (a1:as))) = (Just a, Lefts (a1, as))
+elHeadLeft el = (Nothing, el)
 
-elLastSplitLeft :: EitherList a b -> GVCalc (a, EitherList a b)
-elLastSplitLeft (Lefts (a, []      )) = return (a      , Empty             )
-elLastSplitLeft (Lefts (a, as@(_:_))) = return (last as, Lefts (a, init as))
-elLastSplitLeft _ = throwError "elLastSplitLeft of Rights or Empty EitherList"
-
-elHeadSplitRight :: EitherList a b -> GVCalc (b, EitherList a b)
-elHeadSplitRight (Rights (b, []     )) = return (b, Empty          )
-elHeadSplitRight (Rights (b, (b1:bs))) = return (b, Rights (b1, bs))
-elHeadSplitRight _ = throwError "elHeadSplitRight of Lefts or Empty EitherList"
-
-elLastSplitRight :: EitherList a b -> GVCalc (b, EitherList a b)
-elLastSplitRight (Rights (b, []      )) = return (b      , Empty              )
-elLastSplitRight (Rights (b, bs@(_:_))) = return (last bs, Rights (b, init bs))
-elLastSplitRight _ = throwError "elLastSplitRight of Lefts or Empty EitherList"
-
-elMap :: (a -> c) -> (b -> d) -> EitherList a b -> EitherList c d
-elMap acf bdf el = case el of
-    Empty          -> Empty
-    Lefts  (a, as) -> Lefts  (acf a, map acf as)
-    Rights (b, bs) -> Rights (bdf b, map bdf bs)
-
-eitherList :: (a -> c) -> (b -> c) -> EitherList a b -> [c]
-eitherList acf bcf el = case el of
-    Empty          -> []
-    Lefts  (a, as) -> map acf (a:as)
-    Rights (b, bs) -> map bcf (b:bs)
-
-data EitherListDirection = ELEmpty | ELLefts | ELRights deriving (Show, Eq, Ord)
-
-elDir :: EitherList a b -> EitherListDirection
-elDir  Empty     = ELEmpty
-elDir (Lefts  _) = ELLefts
-elDir (Rights _) = ELRights
-
-elIsEmpty, elIsLefts, elIsRights :: EitherList a b -> Bool
-elIsEmpty  = (== ELEmpty ) . elDir
-elIsLefts  = (== ELLefts ) . elDir
-elIsRights = (== ELRights) . elDir
+elHeadRight :: EitherList a b -> (Maybe b, EitherList a b)
+elHeadRight (Rights (b, []     )) = (Just b, Empty          )
+elHeadRight (Rights (b, (b1:bs))) = (Just b, Rights (b1, bs))
+elHeadRight el = (Nothing, el)
 
 -- Flip a map. Both the keys and values must be in Ord, since the output will
 -- use the values of the input as keys. Since we cannot have duplicate keys, if

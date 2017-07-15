@@ -24,7 +24,7 @@ apply :: Context -> Exp -> Exp
 apply ctx exp = case ctx of
     Hole           -> exp
     CLet n1 n2 c e -> Let n1 n2 (apply c exp) e
-    CCase c e2 e3  -> Case (apply c exp) e2 e3
+    CCase  c e2 e3 -> Case (apply c exp) e2 e3
     CSelectL c e   -> Select (apply c exp) e
     CSelectR v c   -> Select (Lit v) (apply c exp)
     CAppL    c e   -> App (apply c exp) e
@@ -112,42 +112,30 @@ putHeapContents n hc = do
 getMessage :: Name -> StateT Machine GVCalc (Maybe Val)
 getMessage c = do
     (d, i, mor, roa) <- getHeapContents c
-    case mor of
-        Lefts (m, ms) -> do
-            let mor' = if null ms then Empty else Lefts (head ms, tail ms)
-            putHeapContents c (d, i, mor', roa)
-            return $ Just m
-        _ -> return Nothing
+    let (maybeVal, mor') = elHeadLeft mor
+    putHeapContents c (d, i, mor', roa)
+    return maybeVal
 
 getWaitingReceive :: Name -> StateT Machine GVCalc (Maybe Context)
 getWaitingReceive c = do
     (d, i, mor, roa) <- getHeapContents c
-    case mor of
-        Rights (r, rs) -> do
-            let mor' = if null rs then Empty else Rights (head rs, tail rs)
-            putHeapContents c (d, i, mor', roa)
-            return $ Just r
-        _ -> return Nothing
+    let (maybeCtx, mor') = elHeadRight mor
+    putHeapContents c (d, i, mor', roa)
+    return maybeCtx
 
 getWaitingRequest :: Name -> StateT Machine GVCalc (Maybe (Context, Integer))
 getWaitingRequest c = do
     (d, i, mor, roa) <- getHeapContents c
-    case roa of
-        Lefts (r, rs) -> do
-            let roa' = if null rs then Empty else Lefts (head rs, tail rs)
-            putHeapContents c (d, i, mor, roa')
-            return $ Just r
-        _ -> return Nothing
+    let (maybeCI, roa') = elHeadLeft roa
+    putHeapContents c (d, i, mor, roa')
+    return maybeCI
 
 getWaitingAccept :: Name -> StateT Machine GVCalc (Maybe (Context, Integer))
 getWaitingAccept c = do
     (d, i, mor, roa) <- getHeapContents c
-    case roa of
-        Rights (a, as) -> do
-            let roa' = if null as then Empty else Rights (head as, tail as)
-            putHeapContents c (d, i, mor, roa')
-            return $ Just a
-        _ -> return Nothing
+    let (maybeCI, roa') = elHeadRight roa
+    putHeapContents c (d, i, mor, roa')
+    return maybeCI
 
 putMessage :: Name -> Val -> StateT Machine GVCalc ()
 putMessage c v = do
@@ -257,8 +245,10 @@ handleExp :: Context -> Exp -> StateT Machine GVCalc ()
 handleExp ctx exp = case exp of
 
     App (Lit (Lam x e)) (Lit v) -> lift ((v/x) e) >>= handleExp ctx
-    --App (Lit Fix) (Lit (Lam x e)) ->
+
+    -- TODO App (Lit Fix) (Lit (Lam x e)) ->
     --    lift (((App (Lit Fix) (Lam x e))/x) e) >>= handleExp ctx
+
     App (App (Lit Send) (Lit v)) (Lit (Var c)) -> do
         d <- twinChannel c
         maybeRcv <- getWaitingReceive d
@@ -266,15 +256,30 @@ handleExp ctx exp = case exp of
             Nothing  -> putMessage d v
             Just rcv -> enqueueBack (rcv `apply` Lit v)
         enqueueFront (ctx `apply` Lit (Var c))
+
     App (Lit Receive) (Lit (Var c)) -> do
         maybeMsg <- getMessage c
         case maybeMsg of
-            Nothing  -> putWaitingReceive c (ctx `extend` CPairL Hole (Lit (Var c)))
-            Just msg -> enqueueFront (ctx `apply` Pair (Lit msg) (Lit (Var c)))
+            Just msg -> enqueueFront $ ctx `apply` Pair (Lit msg) (Lit (Var c))
+            Nothing  ->
+                putWaitingReceive c $ ctx `extend` CPairL Hole (Lit (Var c))
+
+    App (Lit (Accept  n)) (Lit (Var c)) -> do
+        maybeReq <- getWaitingRequest c
+        case maybeReq of
+            Just req -> undefined
+            Nothing  -> putWaitingAccept c (ctx, n)
+
+    App (Lit (Request n)) (Lit (Var c)) -> do
+        maybeAcc <- getWaitingAccept c
+        case maybeAcc of
+            Just acc -> undefined
+            Nothing  -> putWaitingRequest c (ctx, n)
+
     App (Lit v) e  -> handleExp (ctx `extend` CAppR v    Hole) e
     App e1      e2 -> handleExp (ctx `extend` CAppL Hole e2  ) e1
 
-    Pair (Lit v1) (Lit v2) -> enqueueFront (ctx `apply` Lit (ValPair v1 v2))
+    Pair (Lit v1) (Lit v2) -> enqueueFront $ ctx `apply` Lit (ValPair v1 v2)
     Pair (Lit v)  e        -> handleExp (ctx `extend` CPairR v    Hole) e
     Pair e1       e2       -> handleExp (ctx `extend` CPairL Hole e2  ) e1
 
@@ -283,11 +288,24 @@ handleExp ctx exp = case exp of
         enqueueFront (ctx `apply` e')
     Let n1 n2 e1 e2 -> handleExp (ctx `extend` CLet n1 n2 Hole e2) e1
 
-    Select (Lit v) (Lit (Var c)) -> undefined
-    Select (Lit v) e  -> undefined
-    Select e1      e2 -> undefined
+    Select (Lit v) (Lit (Var c)) -> do
+        d <- twinChannel c
+        maybeCase <- getWaitingReceive d
+        case maybeCase of
+            Nothing  -> putMessage d v
+            Just rcv -> enqueueBack $ rcv `apply` Lit v
+        enqueueFront (ctx `apply` Lit (Var c))
+    Select (Lit v) e  -> handleExp (ctx `extend` CSelectR v  Hole) e
+    Select e1      e2 -> handleExp (ctx `extend` CPairL Hole e2  ) e1
 
-    Case (Lit (Var c)) e1 e2 -> undefined
-    Case e1 e2 e3 -> undefined
+    Case (Lit (Boolean b)) e1 e2 -> enqueueFront $ if b then e1 else e2
+    Case (Lit (Var     c)) e1 e2 -> do
+        maybeMsg <- getMessage c
+        case maybeMsg of
+            Nothing -> putWaitingReceive c $ ctx `extend` CCase Hole e1 e2
+            Just (Boolean True ) -> enqueueFront $ ctx `apply` e1
+            Just (Boolean False) -> enqueueFront $ ctx `apply` e2
+            Just _ -> lift $ throwError "Type error - case got non-bool."
+    Case e1 e2 e3 -> handleExp (ctx `extend` CCase Hole e2 e3) e1
 
-    _ -> putGarbage (apply ctx exp)
+    _ -> putGarbage $ ctx `apply` exp
