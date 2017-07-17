@@ -8,57 +8,15 @@ import qualified Data.Map as M
 import Control.Monad.State
 import Control.Monad.Except
 
-data Context
-    = Hole
-    | CLet Name Name Context Exp
-    | CCase Context Exp Exp
-    | CSelectL Context Exp
-    | CSelectR Val     Context
-    | CAppL    Context Exp
-    | CAppR    Val     Context
-    | CPairL   Context Exp
-    | CPairR   Val     Context
-    deriving (Show, Eq, Ord)
+newtype Machine = Machine (Queue, Heap, Garbage)
 
-apply :: Context -> Exp -> Exp
-apply ctx exp = case ctx of
-    Hole           -> exp
-    CLet n1 n2 c e -> Let n1 n2 (apply c exp) e
-    CCase  c e2 e3 -> Case (apply c exp) e2 e3
-    CSelectL c e   -> Select (apply c exp) e
-    CSelectR v c   -> Select (Lit v) (apply c exp)
-    CAppL    c e   -> App (apply c exp) e
-    CAppR    v c   -> App (Lit v) (apply c exp)
-    CPairL   c e   -> Pair (apply c exp) e
-    CPairR   v c   -> Pair (Lit v) (apply c exp)
+newtype Queue = Queue [Exp]
 
-extend ::  Context -> Context -> Context
-extend outer inner = case outer of
-    Hole           -> inner
-    CLet n1 n2 c e -> CLet n1 n2 (extend c inner) e
-    CCase c e2 e3  -> CCase (extend c inner) e2 e3
-    CSelectL c e   -> CSelectL (extend c inner) e
-    CSelectR v c   -> CSelectR v (extend c inner)
-    CAppL    c e   -> CAppL (extend c inner) e
-    CAppR    v c   -> CAppR v (extend c inner)
-    CPairL   c e   -> CPairL (extend c inner) e
-    CPairR   v c   -> CPairR v (extend c inner)
+newtype Heap = Heap (M.Map Name HeapContents)
 
-newtype Machine =
-    Machine (Queue, Heap, Garbage)
-    deriving (Show, Eq, Ord)
+newtype Garbage = Garbage [Exp]
 
-newtype Queue =
-    Queue [Exp]
-    deriving (Show, Eq, Ord)
-
-newtype Heap =
-    Heap (M.Map Name HeapContents)
-    deriving (Show, Eq, Ord)
-
-newtype Garbage =
-    Garbage [Exp]
-    deriving (Show, Eq, Ord)
+type Context = Exp -> Exp
 
 type HeapContents =
     ( Name                          -- The dual channel
@@ -141,6 +99,7 @@ putMessage :: Name -> Val -> StateT Machine GVCalc ()
 putMessage c v = do
     (d, i, mor, roa) <- getHeapContents c
     mor' <- lift $ elAppend (Left v) mor
+    lift $ assert (elLength mor' <= i) "channel buffer length exceeded"
     putHeapContents c (d, i, mor', roa)
 
 putWaitingReceive :: Name -> Context -> StateT Machine GVCalc ()
@@ -190,13 +149,13 @@ toConfig (Machine (Queue queue, Heap heap, Garbage garbage)) = let
         rcvQ = case toEither mor of
             Left  _    -> []
             Right ctxs ->
-                map (Exe . (flip apply) (App (Lit Receive) (Lit (Var c)))) ctxs
+                map (\ctx -> Exe (ctx (App (Lit Receive) (Lit (Var c))))) ctxs
 
         roaConfigs :: [Config]
         roaConfigs = let
 
             buildExp :: (Integer -> Val) -> (Context, Integer) -> Exp
-            buildExp f (ctx, j) = apply ctx (App (Lit (f j)) (Lit (Var c)))
+            buildExp f (ctx, j) = ctx (App (Lit (f j)) (Lit (Var c)))
 
             exps :: [Exp]
             exps = either
@@ -239,73 +198,87 @@ run :: Machine -> GVCalc Machine
 run m = if runnable m then runStateT step m >>= run . snd else return m
 
 step :: StateT Machine GVCalc ()
-step = dequeue >>= handleExp Hole
+step = dequeue >>= handleExp id
 
 handleExp :: Context -> Exp -> StateT Machine GVCalc ()
 handleExp ctx exp = case exp of
-
-    App (Lit (Lam x e)) (Lit v) -> lift ((v/x) e) >>= handleExp ctx
-
-    -- TODO App (Lit Fix) (Lit (Lam x e)) ->
-    --    lift (((App (Lit Fix) (Lam x e))/x) e) >>= handleExp ctx
 
     App (App (Lit Send) (Lit v)) (Lit (Var c)) -> do
         d <- twinChannel c
         maybeRcv <- getWaitingReceive d
         case maybeRcv of
             Nothing  -> putMessage d v
-            Just rcv -> enqueueBack (rcv `apply` Lit v)
-        enqueueFront (ctx `apply` Lit (Var c))
+            Just rcv -> enqueueBack $ rcv $ Lit v
+        enqueueFront $ ctx $ Lit $ Var c
 
     App (Lit Receive) (Lit (Var c)) -> do
         maybeMsg <- getMessage c
         case maybeMsg of
-            Just msg -> enqueueFront $ ctx `apply` Pair (Lit msg) (Lit (Var c))
-            Nothing  ->
-                putWaitingReceive c $ ctx `extend` CPairL Hole (Lit (Var c))
+            Just msg -> enqueueFront $ ctx $ Pair (Lit msg) (Lit (Var c))
+            Nothing  -> putWaitingReceive c $ ctx . (\k -> Pair k (Lit (Var c)))
 
-    App (Lit (Accept  n)) (Lit (Var c)) -> do
+    App (Lit (Accept n)) (Lit (Var c)) -> do
         maybeReq <- getWaitingRequest c
         case maybeReq of
-            Just req -> undefined
-            Nothing  -> putWaitingAccept c (ctx, n)
+            Just (reqCtx, reqN) -> dispatchAccReq True ctx n reqCtx reqN
+            Nothing             -> putWaitingAccept c (ctx, n)
 
     App (Lit (Request n)) (Lit (Var c)) -> do
         maybeAcc <- getWaitingAccept c
         case maybeAcc of
-            Just acc -> undefined
-            Nothing  -> putWaitingRequest c (ctx, n)
+            Just (accCtx, accN) -> dispatchAccReq False accCtx accN ctx n
+            Nothing             -> putWaitingRequest c (ctx, n)
 
-    App (Lit v) e  -> handleExp (ctx `extend` CAppR v    Hole) e
-    App e1      e2 -> handleExp (ctx `extend` CAppL Hole e2  ) e1
+    App (Lit (Lam x e)) (Lit v) -> lift ((v/x) e) >>= handleExp ctx
 
-    Pair (Lit v1) (Lit v2) -> enqueueFront $ ctx `apply` Lit (ValPair v1 v2)
-    Pair (Lit v)  e        -> handleExp (ctx `extend` CPairR v    Hole) e
-    Pair e1       e2       -> handleExp (ctx `extend` CPairL Hole e2  ) e1
+    App (Lit Fix) (Lit (Lam x e)) ->
+        lift (expSubExp (App (Lit Fix) (Lit (Lam x e))) x e) >>= handleExp ctx
+
+    App (Lit Fork) e -> do
+        enqueueFront $ ctx $ Lit $ Unit
+        enqueueBack e
+
+    App (Lit v) e  -> handleExp (ctx . (\k -> App (Lit v) k )) e
+    App e1      e2 -> handleExp (ctx . (\k -> App k       e2)) e1
+
+    Pair (Lit v1) (Lit v2) -> enqueueFront $ ctx $ Lit $ ValPair v1 v2
+    Pair (Lit v)  e        -> handleExp (ctx . (\k -> Pair (Lit v) k )) e
+    Pair e1       e2       -> handleExp (ctx . (\k -> Pair k       e2)) e1
 
     Let n1 n2 (Lit (ValPair v1 v2)) e -> do
         e' <- lift $ ((v1/n1) >=> (v2/n2)) e
-        enqueueFront (ctx `apply` e')
-    Let n1 n2 e1 e2 -> handleExp (ctx `extend` CLet n1 n2 Hole e2) e1
+        enqueueFront $ ctx e'
+    Let n1 n2 e1 e2 -> handleExp (ctx . (\k -> Let n1 n2 k e2)) e1
 
     Select (Lit v) (Lit (Var c)) -> do
         d <- twinChannel c
         maybeCase <- getWaitingReceive d
         case maybeCase of
             Nothing  -> putMessage d v
-            Just rcv -> enqueueBack $ rcv `apply` Lit v
-        enqueueFront (ctx `apply` Lit (Var c))
-    Select (Lit v) e  -> handleExp (ctx `extend` CSelectR v  Hole) e
-    Select e1      e2 -> handleExp (ctx `extend` CPairL Hole e2  ) e1
+            Just rcv -> enqueueBack $ rcv $ Lit v
+        enqueueFront $ ctx $ Lit $ Var c
+    Select (Lit v) e  -> handleExp (ctx . (\k -> Select (Lit v) k )) e
+    Select e1      e2 -> handleExp (ctx . (\k -> Pair   k       e2)) e1
 
-    Case (Lit (Boolean b)) e1 e2 -> enqueueFront $ if b then e1 else e2
-    Case (Lit (Var     c)) e1 e2 -> do
+    Case (Lit (Var c)) e1 e2 -> do
         maybeMsg <- getMessage c
         case maybeMsg of
-            Nothing -> putWaitingReceive c $ ctx `extend` CCase Hole e1 e2
-            Just (Boolean True ) -> enqueueFront $ ctx `apply` e1
-            Just (Boolean False) -> enqueueFront $ ctx `apply` e2
+            Nothing -> putWaitingReceive c $ (ctx . (\k -> case k of
+                Lit (Boolean True ) -> e1
+                Lit (Boolean False) -> e2
+                _ -> error "Type error - case got non-bool."))
+            Just (Boolean True ) -> enqueueFront $ ctx e1
+            Just (Boolean False) -> enqueueFront $ ctx e2
             Just _ -> lift $ throwError "Type error - case got non-bool."
-    Case e1 e2 e3 -> handleExp (ctx `extend` CCase Hole e2 e3) e1
+    Case e1 e2 e3 -> handleExp (ctx . (\k -> Case k e2 e3)) e1
 
-    _ -> putGarbage $ ctx `apply` exp
+    _ -> putGarbage $ ctx exp
+
+    where
+
+    dispatchAccReq :: Bool -> Context -> Integer -> Context -> Integer ->
+        StateT Machine GVCalc ()
+    dispatchAccReq accInitiates accCtx accI reqCtx reqI = do
+        c <- lift freshName
+        d <- lift freshName
+        undefined

@@ -163,6 +163,37 @@ instance Subst Exp where
         Case e t f      ->
             liftM3 Case ((val / name) e) ((val / name) t) ((val / name) f)
 
+expSubLit :: Exp -> Name -> Val -> GVCalc Exp
+expSubLit to from bodyVal = case bodyVal of
+        Var n   | n == from -> return to
+        Lam n e | n /= from -> do
+            n'  <- freshName
+            e'  <- ((expSubExp (Lit (Var n')) n) >=> expSubExp to from) e
+            return $ Lit $ Lam n' e'
+        ValPair v1 v2       ->
+            liftM2 Pair (expSubLit to from v1) (expSubLit to from v2)
+        _                   -> return $ Lit $ bodyVal
+
+expSubExp :: Exp -> Name -> Exp -> GVCalc Exp
+expSubExp to from bodyExp = case bodyExp of
+    Lit v           -> expSubLit to from v
+    App e1 e2       ->
+        liftM2 App (expSubExp to from e1) (expSubExp to from e2)
+    Pair e1 e2      ->
+        liftM2 Pair (expSubExp to from e1) (expSubExp to from e2)
+    Let n1 n2 e1 e2 -> do
+        n1' <- if from == n1 then return from else freshName
+        n2' <- if from == n2 then return from else freshName
+        e1' <- expSubExp to from e1
+        e2' <- (expSubExp (Lit (Var n2')) n2
+            >=> expSubExp (Lit (Var n1')) n1
+            >=> expSubExp to from) e2
+        return $ Let n1' n2' e1' e2'
+    Select e1 e2    -> liftM2 Select
+        (expSubExp to from e1) (expSubExp to from e2)
+    Case e t f      -> liftM3 Case
+        (expSubExp to from e) (expSubExp to from t) (expSubExp to from f)
+
 chanSub :: Name -> Name -> Config -> GVCalc Config
 chanSub to from bodyCfg = case bodyCfg of
         Exe e            -> liftM Exe ((Var to / from) e)

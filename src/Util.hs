@@ -95,6 +95,9 @@ data EitherList a b
     | Rights (b, [b])
     deriving (Show, Eq, Ord)
 
+elLength :: EitherList a b -> Integer
+elLength = toInteger . (either length length) . toEither
+
 lefts :: [a] -> EitherList a b
 lefts []     = Empty
 lefts (a:as) = Lefts (a, as)
