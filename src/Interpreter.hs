@@ -281,4 +281,11 @@ handleExp ctx exp = case exp of
     dispatchAccReq accInitiates accCtx accI reqCtx reqI = do
         c <- lift freshName
         d <- lift freshName
-        undefined
+        putHeapContents c (d, reqI, Empty, Empty)
+        putHeapContents d (c, accI, Empty, Empty)
+        if accInitiates then do
+            enqueueFront $ accCtx $ Lit $ Var d
+            enqueueBack  $ reqCtx $ Lit $ Var c
+        else do
+            enqueueFront $ reqCtx $ Lit $ Var c
+            enqueueBack  $ accCtx $ Lit $ Var d

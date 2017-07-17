@@ -1,0 +1,6 @@
+new x y in
+    (  x -> (y, 10, [])
+    || y -> (x, 10, [])
+    || < case x of 123 else 456 >
+    || < select false of y >
+    )
