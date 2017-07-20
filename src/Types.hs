@@ -160,15 +160,32 @@ instance Subtype Type where
     (TAccessPoint s1 s2  ) <: (TRequest s2'        ) | s2 `α` s2' =
         all contractive [s1, s2] && all closed [s1, s2]
     (TFunction t t'      ) <: (TLinearFunction u u') | t `α` u && t' `α` u' =
-        all contractive [t, t'] && all closed [t, t']
+        all contractive [t , t'] && all closed [t , t']
     _                      <: _                      = undefined
 
 instance Subtype Session where
     SEnd          <: SEnd            = True
-    (SIn t s    ) <: (SIn t' s'    ) = t <: t' && s <: s'
-    (SOut t s   ) <: (SOut t' s'   ) = t' <: t && s <: s'
-    (SCase t f  ) <: (SCase t' f'  ) = t' <: t && f <: f'
-    (SSelect t f) <: (SSelect t' f') = t' <: t && f <: f'
+    (SIn t s    ) <: (SIn t' s'    ) = t  <: t' && s <: s'
+    (SOut t s   ) <: (SOut t' s'   ) = t' <: t  && s <: s'
+    (SCase t f  ) <: (SCase t' f'  ) = t' <: t  && f <: f'
+    (SSelect t f) <: (SSelect t' f') = t' <: t  && f <: f'
     (SVar n     ) <: (SVar n'      ) = undefined
     (SRec n s   ) <: (SRec n' s'   ) = undefined
     _             <: _               = undefined
+
+type Env = M.Map Name Type
+
+unlim :: Env -> Bool
+unlim = undefined
+
+class Check t where
+    (⊢) :: Env -> t -> GVCalc ()
+
+instance Check Exp where
+    (⊢) env exp = case exp of
+        Lit v           -> undefined
+        App e1 e2       -> undefined
+        Pair e1 e2      -> undefined
+        Let n1 n2 e1 e2 -> undefined
+        Select e1 e2    -> undefined
+        Case e1 e2 e3   -> undefined
