@@ -144,24 +144,31 @@ dual st = case st of
     SVar n      -> SVar n
     SRec n s    -> SRec n (dual s)
 
+(<:) :: Subtype t => t -> t -> Bool
+(<:) = subtypeWithAssumptions M.empty
+
 class Subtype t where
-    (<:) :: t -> t -> Bool
+    subtypeWithAssumptions :: M.Map Name Name -> t -> t -> Bool
 
 instance Subtype Type where
-    (TSession s          ) <: (TSession s'         ) = s <: s'
-    (TUnit               ) <: (TUnit               ) = True
-    (TFunction t t'      ) <: (TFunction u u'      ) = u <: t && t' <: u'
-    (TLinearFunction t t') <: (TLinearFunction u u') = u <: t && t' <: u'
-    (TRequest s          ) <: (TRequest s'         ) = s <: s'
-    (TAccept s           ) <: (TAccept s'          ) = s <: s'
-    (TAccessPoint s1 s1' ) <: (TAccessPoint s2 s2' ) = s1 <: s2 && s1' <: s2'
-    (TAccessPoint s1 s2  ) <: (TAccept s1'         ) | s1 `α` s1' =
-        all contractive [s1, s2] && all closed [s1, s2]
-    (TAccessPoint s1 s2  ) <: (TRequest s2'        ) | s2 `α` s2' =
-        all contractive [s1, s2] && all closed [s1, s2]
-    (TFunction t t'      ) <: (TLinearFunction u u') | t `α` u && t' `α` u' =
-        all contractive [t , t'] && all closed [t , t']
-    _                      <: _                      = undefined
+    subtypeWithAssumptions Σ a b = case (a, b) of
+        (TUnit              , TUnit              ) -> True
+        (TSession a         , TSession α         ) -> a <: α
+        (TFunction a b      , TFunction α β      ) -> α <: a && b <: β
+        (TLinearFunction a b, TLinearFunction α β) -> α <: a && b <: β
+        (TRequest a         , TRequest α         ) -> a <: α
+        (TAccept a          , TAccept α          ) -> a <: α
+        (TAccessPoint a b   , TAccessPoint α β   ) -> a <: α && b <: β
+        (TAccessPoint s1 s2  , TAccept s1'         ) | s1 `α` s1' ->
+            all contractive [s1, s2] && all closed [s1, s2]
+        (TAccessPoint s1 s2  , TRequest s2'        ) | s2 `α` s2' ->
+            all contractive [s1, s2] && all closed [s1, s2]
+        (TFunction t t'      , TLinearFunction u u') | t `α` u && t' `α` u' ->
+            all contractive [t , t'] && all closed [t , t']
+        (_                   , _                   ) -> False
+    where
+    (<:) :: Subtype t => t -> t -> Bool
+    (<:) = subtypeWithAssumptions Σ
 
 instance Subtype Session where
     SEnd          <: SEnd            = True
@@ -171,7 +178,7 @@ instance Subtype Session where
     (SSelect t f) <: (SSelect t' f') = t' <: t  && f <: f'
     (SVar n     ) <: (SVar n'      ) = undefined
     (SRec n s   ) <: (SRec n' s'   ) = undefined
-    _             <: _               = undefined
+    _             <: _               = False
 
 type Env = M.Map Name Type
 
