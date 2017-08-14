@@ -151,34 +151,39 @@ class Subtype t where
     subtypeWithAssumptions :: M.Map Name Name -> t -> t -> Bool
 
 instance Subtype Type where
-    subtypeWithAssumptions Σ a b = case (a, b) of
+    subtypeWithAssumptions m t u = case (t, u) of
         (TUnit              , TUnit              ) -> True
-        (TSession a         , TSession α         ) -> a <: α
-        (TFunction a b      , TFunction α β      ) -> α <: a && b <: β
-        (TLinearFunction a b, TLinearFunction α β) -> α <: a && b <: β
-        (TRequest a         , TRequest α         ) -> a <: α
-        (TAccept a          , TAccept α          ) -> a <: α
-        (TAccessPoint a b   , TAccessPoint α β   ) -> a <: α && b <: β
-        (TAccessPoint s1 s2  , TAccept s1'         ) | s1 `α` s1' ->
-            all contractive [s1, s2] && all closed [s1, s2]
-        (TAccessPoint s1 s2  , TRequest s2'        ) | s2 `α` s2' ->
-            all contractive [s1, s2] && all closed [s1, s2]
-        (TFunction t t'      , TLinearFunction u u') | t `α` u && t' `α` u' ->
-            all contractive [t , t'] && all closed [t , t']
-        (_                   , _                   ) -> False
-    where
-    (<:) :: Subtype t => t -> t -> Bool
-    (<:) = subtypeWithAssumptions Σ
+        (TSession a         , TSession x         ) -> a <: x
+        (TFunction a b      , TFunction x y      ) -> x <: a && b <: y
+        (TLinearFunction a b, TLinearFunction x y) -> x <: a && b <: y
+        (TRequest a         , TRequest x         ) -> a <: x
+        (TAccept a          , TAccept x          ) -> a <: x
+        (TAccessPoint a b   , TAccessPoint x y   ) -> a <: x && b <: y
+        (TAccessPoint a b   , TAccept x          ) | a `α` x ->
+            all contractive [a, b] && all closed [a, b]
+        (TAccessPoint a b   , TRequest y         ) | b `α` y ->
+            all contractive [a, b] && all closed [a, b]
+        (TFunction a b      , TLinearFunction x y) | a `α` x && b `α` y ->
+            all contractive [a , b] && all closed [a , b]
+        (_                  , _                  ) -> False
+        where
+        (<:) :: Subtype t => t -> t -> Bool
+        (<:) = subtypeWithAssumptions m
 
 instance Subtype Session where
-    SEnd          <: SEnd            = True
-    (SIn t s    ) <: (SIn t' s'    ) = t  <: t' && s <: s'
-    (SOut t s   ) <: (SOut t' s'   ) = t' <: t  && s <: s'
-    (SCase t f  ) <: (SCase t' f'  ) = t' <: t  && f <: f'
-    (SSelect t f) <: (SSelect t' f') = t' <: t  && f <: f'
-    (SVar n     ) <: (SVar n'      ) = undefined
-    (SRec n s   ) <: (SRec n' s'   ) = undefined
-    _             <: _               = False
+    subtypeWithAssumptions m a b = case (a, b) of
+        (SEnd       , SEnd       ) -> True
+        (SIn a b    , SIn x y    ) -> a <: x && b <: y
+        (SOut a b   , SOut x y   ) -> x <: a && b <: y
+        (SCase a b  , SCase x y  ) -> x <: a && b <: y
+        (SSelect a b, SSelect x y) -> x <: a && b <: y
+        (SVar a     , SVar x     ) -> M.lookup a m == Just x
+        (SRec a b   , SRec x y   ) ->
+            subtypeWithAssumptions (M.insert a x m) b y
+        (_          , _          ) -> False
+        where
+        (<:) :: Subtype t => t -> t -> Bool
+        (<:) = subtypeWithAssumptions m
 
 type Env = M.Map Name Type
 
