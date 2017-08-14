@@ -185,13 +185,35 @@ instance Subtype Session where
         (<:) :: Subtype t => t -> t -> Bool
         (<:) = subtypeWithAssumptions m
 
-type Env = M.Map Name Type
+class Multiplicity a where
+    linear :: a -> Bool
+    unlim :: a -> Bool
 
-unlim :: Env -> Bool
-unlim = undefined
+instance Multiplicity Type where
+    linear ty = case ty of
+        TSession a          -> linear a
+        TLinearPair _ _     -> True
+        TLinearFunction _ _ -> True
+        _                   -> False
+    unlim ty = case ty of
+        TFunction _ _       -> True
+        TRequest _          -> True
+        TAccept _           -> True
+        TAccessPoint _ _    -> True
+        _                   -> False
+
+instance Multiplicity Session where
+    linear = (/=) SEnd
+    unlim  = (==) SEnd
+
+newtype Env = Env (M.Map Name Type)
+
+instance Multiplicity Env where
+    linear = undefined
+    unlim = undefined
 
 class Check t where
-    (⊢) :: Env -> t -> GVCalc ()
+    (⊢) :: Env -> t -> GVCalc Type
 
 instance Check Exp where
     (⊢) env exp = case exp of
