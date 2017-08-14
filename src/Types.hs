@@ -206,18 +206,26 @@ instance Multiplicity Session where
     linear = (/=) SEnd
     unlim  = (==) SEnd
 
-newtype Env = Env (M.Map Name Type)
+newtype Env = Env (M.Map Name Type) deriving (Show, Eq, Ord)
 
 instance Multiplicity Env where
     linear = undefined
     unlim = undefined
 
+data Scheme = Forall [Name] [Constraint] Type deriving (Show, Eq, Ord)
+
+data Constraint
+    = CEqual Type Type
+    | CDual  Type Type
+    | CUnlim Type
+    deriving (Show, Eq, Ord)
+
 class Check t where
-    (⊢) :: Env -> t -> GVCalc Type
+    (⊢) :: Env -> t -> GVCalc Scheme
 
 instance Check Exp where
     (⊢) env exp = case exp of
-        Lit v           -> undefined
+        Lit v           -> undefined -- Forall [t] [] (TFunction (TFunction t t) t)
         App e1 e2       -> undefined
         Pair e1 e2      -> undefined
         Let n1 n2 e1 e2 -> undefined
