@@ -6,16 +6,20 @@ import Syntax
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Control.Monad.State
+import Control.Monad.Writer
 
 data Type
     = TSession Session
     | TUnit
+    | TBool
+    | TInt
     | TLinearPair Type Type
     | TFunction Type Type
     | TLinearFunction Type Type
     | TRequest Session
     | TAccept Session
     | TAccessPoint Session Session
+    | TVar Name
     deriving (Show, Eq, Ord)
 
 data Session
@@ -32,12 +36,15 @@ instance Free Type where
     free ty = case ty of
         TSession s            -> free s
         TUnit                 -> S.empty
+        TBool                 -> S.empty
+        TInt                  -> S.empty
         TLinearPair t1 t2     -> free t1 `S.union` free t2
         TFunction t1 t2       -> free t1 `S.union` free t2
         TLinearFunction t1 t2 -> free t1 `S.union` free t2
         TRequest s            -> free s
         TAccept s             -> free s
         TAccessPoint s1 s2    -> free s1 `S.union` free s2
+        TVar n                -> S.singleton n
 
 instance Free Session where
     free st = case st of
@@ -69,6 +76,9 @@ instance Alpha Type where
         (TRequest s          , TRequest s'         ) -> alpha s s'
         (TAccept s           , TAccept s'          ) -> alpha s s'
         (TUnit               , TUnit               ) -> Just M.empty
+        (TBool               , TBool               ) -> Just M.empty
+        (TInt                , TInt                ) -> Just M.empty
+        (TVar n              , TVar n'             ) -> Just $ M.singleton n n'
         (_                   , _                   ) -> Nothing
 
 instance Alpha Session where
@@ -107,12 +117,15 @@ instance ContractiveWithIllegals Type where
     cwi il ty = case ty of
         TSession s            -> cwi il s
         TUnit                 -> True
+        TBool                 -> True
+        TInt                  -> True
         TLinearPair t1 t2     -> cwi [] t1 && cwi [] t2
         TFunction t1 t2       -> cwi [] t1 && cwi [] t2
         TLinearFunction t1 t2 -> cwi [] t1 && cwi [] t2
         TRequest s            -> cwi [] s
         TAccept s             -> cwi [] s
         TAccessPoint s1 s2    -> cwi [] s1 && cwi [] s2
+        TVar n                -> notElem n il
 
 instance ContractiveWithIllegals Session where
     cwi il st = case st of
@@ -126,7 +139,7 @@ instance ContractiveWithIllegals Session where
 
 -- Contractive: every variable bound with SRec (μ in literature) occurs only
 -- under a constructor such as functions or pairs, and never directly under
--- its binding.
+-- its binding. This property is sometimes also called 'guarded'.
 contractive :: ContractiveWithIllegals t => t -> Bool
 contractive = cwi []
 
@@ -153,6 +166,8 @@ class Subtype t where
 instance Subtype Type where
     subtypeWithAssumptions m t u = case (t, u) of
         (TUnit              , TUnit              ) -> True
+        (TBool              , TBool              ) -> True
+        (TInt               , TInt               ) -> True
         (TSession a         , TSession x         ) -> a <: x
         (TFunction a b      , TFunction x y      ) -> x <: a && b <: y
         (TLinearFunction a b, TLinearFunction x y) -> x <: a && b <: y
@@ -165,6 +180,7 @@ instance Subtype Type where
             all contractive [a, b] && all closed [a, b]
         (TFunction a b      , TLinearFunction x y) | a `α` x && b `α` y ->
             all contractive [a , b] && all closed [a , b]
+        (TVar a             , TVar x             ) -> M.lookup a m == Just x
         (_                  , _                  ) -> False
         where
         (<:) :: Subtype t => t -> t -> Bool
@@ -210,22 +226,42 @@ newtype Env = Env (M.Map Name Type) deriving (Show, Eq, Ord)
 
 instance Multiplicity Env where
     linear = undefined
-    unlim = undefined
+    unlim  = undefined
 
-data Scheme = Forall [Name] [Constraint] Type deriving (Show, Eq, Ord)
+data Scheme
+    = Forall [Name] [Constraint] Type
+    deriving (Show, Eq, Ord)
 
 data Constraint
     = CEqual Type Type
-    | CDual  Type Type
+    | CDual  Session Session
     | CUnlim Type
+    | CBound Integer
     deriving (Show, Eq, Ord)
 
-class Check t where
-    (⊢) :: Env -> t -> GVCalc Scheme
+class ConGen t where
+    gen :: Env -> t -> WriterT [Constraint] GVCalc Scheme
 
-instance Check Exp where
-    (⊢) env exp = case exp of
-        Lit v           -> undefined -- Forall [t] [] (TFunction (TFunction t t) t)
+instance ConGen Val where
+    gen env val = return $ case val of
+        Var n         -> undefined
+        Number _      -> Forall [] [] TInt
+        Boolean _     -> Forall [] [] TBool
+        Fix           -> undefined
+        Fork          -> undefined
+        Request n     -> undefined
+        Accept n      -> undefined
+        Send          -> undefined
+        Receive       -> undefined
+        Plus          -> undefined
+        Minus         -> undefined
+        Lam n e       -> undefined
+        ValPair v1 v2 -> undefined
+        Unit          -> Forall [] [] TUnit
+
+instance ConGen Exp where
+    gen env exp = case exp of
+        Lit v           -> gen env v
         App e1 e2       -> undefined
         Pair e1 e2      -> undefined
         Let n1 n2 e1 e2 -> undefined
