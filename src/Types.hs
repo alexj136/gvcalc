@@ -277,10 +277,11 @@ instance Multiplicity Env where
     linear = undefined
     unlim  = undefined
 
-data (Multiplicity a) => Constraint
+data Multiplicity a => Constraint
     = CEqual Type Type
     | CDual  Session Session
-    | CUnlim a
+    | CUnlimT Type
+    | CUnlimE Env
     | CBound Integer
     | COneOf Constraint Constraint
     deriving (Show, Eq, Ord)
@@ -290,7 +291,9 @@ class ConGen t where
 
 instance ConGen Val where
     gen env val = case val of
-        Var n       -> envLookup env n
+        Var n       -> do
+            tell [CUnlimE env]
+            envLookup env n
         Number _    -> return TInt
         Boolean _   -> return TBool
         Fix         -> do t <- lift freshName; return $ (t ^-> t) ^-> t
@@ -313,6 +316,7 @@ instance ConGen Val where
         Lam n e     -> do
             tN <- liftM TVar $ lift freshName
             tE <- gen (env + (n, tN)) e
+            tell [CUnlimE env]
             return $ tN ^-> tE
         ValPair v w -> do tV <- gen env v; tW <- gen env w; return (tV |*| tW)
         Unit        -> return TUnit
