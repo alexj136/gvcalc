@@ -277,10 +277,10 @@ instance Multiplicity Env where
     linear = undefined
     unlim  = undefined
 
-data Constraint
+data (Multiplicity a) => Constraint
     = CEqual Type Type
     | CDual  Session Session
-    | CUnlim Type
+    | CUnlim a
     | CBound Integer
     | COneOf Constraint Constraint
     deriving (Show, Eq, Ord)
@@ -320,7 +320,13 @@ instance ConGen Val where
 instance ConGen Exp where
     gen env exp = case exp of
         Lit v           -> gen env v
-        App e1 e2       -> undefined
+        App e1 e2       -> do
+            t1 <- gen env e1
+            t2 <- gen env e2
+            f1 <- liftM TVar $ lift freshName
+            f2 <- liftM TVar $ lift freshName
+            tell [CEqual (f1 ^-> f2) t1, CEqual f1 t2]
+            return f2
         Pair e1 e2      -> undefined
         Let n1 n2 e1 e2 -> undefined
         Select e1 e2    -> undefined
