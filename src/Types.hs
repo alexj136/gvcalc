@@ -3,10 +3,15 @@ module Types where
 import Util
 import Syntax
 
+import Prelude hiding ((+))
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Control.Monad.State
 import Control.Monad.Writer
+
+--------------------------------------------------------------------------------
+-- Typing types
+--------------------------------------------------------------------------------
 
 data Type
     = TSession Session
@@ -31,6 +36,44 @@ data Session
     | SVar Name
     | SRec Name Session
     deriving (Show, Eq, Ord)
+
+--------------------------------------------------------------------------------
+-- Some shorthand for writing down types
+--------------------------------------------------------------------------------
+
+class ToSession a where
+    toSession :: a -> Session
+
+instance ToSession Session where
+    toSession = id
+
+instance ToSession Name where
+    toSession = SVar
+
+class ToType a where
+    toType :: a -> Type
+
+instance ToType Type where
+    toType = id
+
+instance ToType Name where
+    toType = TVar
+
+instance ToType Session where
+    toType = TSession
+
+(^->), (^-*), (|*|) :: ToType a => ToType b => a -> b -> Type
+(^->) t1 t2 = TFunction       (toType t1) (toType t2)
+(^-*) t1 t2 = TLinearFunction (toType t1) (toType t2)
+(|*|) t1 t2 = TLinearPair     (toType t1) (toType t2)
+
+(^?), (^!) :: ToType a => ToSession b => a -> b -> Session
+(^?) t s = SIn  (toType t) (toSession s)
+(^!) t s = SOut (toType t) (toSession s)
+
+--------------------------------------------------------------------------------
+-- Free variable definitions
+--------------------------------------------------------------------------------
 
 instance Free Type where
     free ty = case ty of
@@ -222,42 +265,57 @@ instance Multiplicity Session where
     linear = (/=) SEnd
     unlim  = (==) SEnd
 
-newtype Env = Env (M.Map Name Type) deriving (Show, Eq, Ord)
+newtype Env = Env { getMap :: M.Map Name Type } deriving (Show, Eq, Ord)
+
+envLookup :: Env -> Name -> WriterT [Constraint] GVCalc Type
+envLookup (Env env) = lift . mlookup env
+
+(+) :: Env -> (Name, Type) -> Env
+(+) (Env env) (n, t) = Env $ M.insert n t env
 
 instance Multiplicity Env where
     linear = undefined
     unlim  = undefined
-
-data Scheme
-    = Forall [Name] [Constraint] Type
-    deriving (Show, Eq, Ord)
 
 data Constraint
     = CEqual Type Type
     | CDual  Session Session
     | CUnlim Type
     | CBound Integer
+    | COneOf Constraint Constraint
     deriving (Show, Eq, Ord)
 
 class ConGen t where
-    gen :: Env -> t -> WriterT [Constraint] GVCalc Scheme
+    gen :: Env -> t -> WriterT [Constraint] GVCalc Type
 
 instance ConGen Val where
-    gen env val = return $ case val of
-        Var n         -> undefined
-        Number _      -> Forall [] [] TInt
-        Boolean _     -> Forall [] [] TBool
-        Fix           -> undefined
-        Fork          -> undefined
-        Request n     -> undefined
-        Accept n      -> undefined
-        Send          -> undefined
-        Receive       -> undefined
-        Plus          -> undefined
-        Minus         -> undefined
-        Lam n e       -> undefined
-        ValPair v1 v2 -> undefined
-        Unit          -> Forall [] [] TUnit
+    gen env val = case val of
+        Var n       -> envLookup env n
+        Number _    -> return TInt
+        Boolean _   -> return TBool
+        Fix         -> do t <- lift freshName; return $ (t ^-> t) ^-> t
+        Fork        -> do t <- lift freshName; return $ t ^-> TUnit
+        Request n   -> do
+            s <- liftM SVar $ lift freshName
+            t <- liftM SVar $ lift freshName
+            tell [CDual s t]
+            return $ (TRequest s) ^-> t
+        Accept n    -> do
+            s <- liftM SVar $ lift freshName
+            return $ (TRequest s) ^-> s
+        Send        -> undefined
+        Receive     -> do
+            t <- lift freshName
+            s <- lift freshName
+            return $ (t ^? s) ^-> (t |*| s)
+        Plus        -> return $ TInt ^-> (TInt ^-> TInt)
+        Minus       -> return $ TInt ^-> (TInt ^-> TInt)
+        Lam n e     -> do
+            tN <- liftM TVar $ lift freshName
+            tE <- gen (env + (n, tN)) e
+            return $ tN ^-> tE
+        ValPair v w -> do tV <- gen env v; tW <- gen env w; return (tV |*| tW)
+        Unit        -> return TUnit
 
 instance ConGen Exp where
     gen env exp = case exp of
